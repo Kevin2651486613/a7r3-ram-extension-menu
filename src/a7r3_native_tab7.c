@@ -11,8 +11,11 @@
 #define VU2_MLT_UPDATE_REAL       0x0056ef3dUL /* Thumb */
 #define VU2_MLT_PLACE_WGT_REAL    0x0056d71bUL /* Thumb */
 #define VU2_MLT_TAB_COUNT_OFF     0x1c8u
+#define VU2_MLT_TAB_BG_OFF        0x960u
 #define VU2_MLT_TAB6_ICON_OFF     0x1840u      /* 0xb80 + 6 * 0x220 */
 #define VU2_MLT_TAB6_BAR_OFF      0x2720u      /* 0x1a60 + 6 * 0x220 */
+#define GEN_ICON_SET_IMG_VT_IDX   (0x104u / 4u)
+#define SONY_TAB_BG_6TAB          0x020cc146u
 
 #define VU2_PROC_MGR_GUARD        0x00a48b0cUL
 #define VU2_PROC_MGR_INST         0x00a48b10UL
@@ -22,6 +25,12 @@
 #define LIBOBJ_TEXT_SETSTR_ID_GOT    0x0121aa9cUL
 #define LIBOBJ_TEXT_SETSTR_ID_REAL   0x005dbe09UL /* Thumb */
 #define LIBOBJ_TEXT_SETSTR_CSTR_REAL 0x005dbfa1UL /* Thumb */
+#define LIBOBJ_ICON_SET_SCALING      0x003cfc4fUL /* Thumb: GEN_Icon::setScalingFlag(bool) */
+#define LIBOBJ_ICON_SET_FILTER       0x003cfe91UL /* Thumb: GEN_Icon::setImageFilter(bool) */
+#define LIBOBJ_RES_GET_IMG_SIZE      0x005c63e5UL /* Thumb: ResourceManager::getImageSize */
+
+#define SONY_TAB7_BG_NORM            0x0205d9b5u
+#define SONY_TAB7_FG_ICON            0x0205cb79u
 
 /* Sony native string / icon IDs reused for ON/OFF option rows */
 #define SONY_STR_ON               0x0204e109u
@@ -97,6 +106,9 @@ struct cmn_setting_node {
 
 typedef int  (*mlt_update_fn)(void *self);
 typedef void (*mlt_place_wgt_fn)(void *self, void *widget, const int16_t rect[4], int visible);
+typedef void (*gen_icon_set_img_fn)(void *icon, unsigned res_id, int flag);
+typedef void (*gen_icon_set_bool_fn)(void *icon, int flag);
+typedef void (*res_get_img_size_fn)(unsigned res_id, uint16_t *out_w, uint16_t *out_h);
 typedef void (*text_setstr_id_fn)(void *sprite, unsigned res_id);
 typedef void (*text_setstr_cstr_fn)(void *sprite, const char *utf8);
 
@@ -120,6 +132,10 @@ static volatile unsigned long *g_mlt_update_slot;
 static unsigned long g_orig_mlt_update;
 static mlt_update_fn g_real_mlt_update;
 static mlt_place_wgt_fn g_mlt_place_wgt;
+static gen_icon_set_bool_fn g_icon_set_scaling;
+static gen_icon_set_bool_fn g_icon_set_filter;
+static uint16_t g_tab7_fg_w;
+static uint16_t g_tab7_fg_h;
 
 static unsigned long g_mgr_vt_raw[PROC_MGR_VT_COPY_WORDS];
 static volatile unsigned long *g_mgr_vptr_slot;
@@ -150,12 +166,12 @@ static unsigned g_last_text_hits;
 
 static const struct cmn_setting_prop_rec g_tab7_recs[] = {
     { 0x00, 0, 0xffffffffu },
-    { 0x02, 0, 0x0205c6bdu }, /* Menu header color bar resource */
+    { 0x02, 0, SONY_TAB7_FG_ICON }, /* Foreground white icon overlay (paired with 0x0205d9b5/b7/b4) */
     { 0x06, 0, 0xffffffffu },
-    { 0x13, 1, 2u },          /* Tab theme group */
-    { 0x1d, 0, 0x0205d9b5u }, /* Sony unused 7th tab icon normal */
-    { 0x1e, 0, 0x0205d9b7u }, /* Sony unused 7th tab icon active */
-    { 0x1f, 0, 0x0205d9b4u }, /* Sony unused 7th tab icon highlight */
+    { 0x13, 1, 2u },                /* Tab theme group */
+    { 0x1d, 0, SONY_TAB7_BG_NORM }, /* Sony unused 7th tab background normal */
+    { 0x1e, 0, 0x0205d9b7u },       /* Sony unused 7th tab background active */
+    { 0x1f, 0, 0x0205d9b4u },       /* Sony unused 7th tab background highlight */
 };
 static const struct cmn_setting_props g_tab7_props = { g_tab7_recs, 7 };
 
@@ -394,10 +410,36 @@ static int tab7_mlt_update_hook(void *self)
         int tab_cnt = *(const int *)((const uint8_t *)self + VU2_MLT_TAB_COUNT_OFF);
         if (tab_cnt >= 7) {
             static const int16_t rect_tab6[4] = { 533, 0, 91, 66 };
+            int16_t rect_bar6[4] = { 533, 0, 91, 66 };
             void *w_icon = (void *)((uint8_t *)self + VU2_MLT_TAB6_ICON_OFF);
             void *w_bar  = (void *)((uint8_t *)self + VU2_MLT_TAB6_BAR_OFF);
+            void *w_bg   = (void *)((uint8_t *)self + VU2_MLT_TAB_BG_OFF);
+
+            if (g_icon_set_scaling)
+                g_icon_set_scaling(w_icon, 1);
+            if (g_icon_set_filter)
+                g_icon_set_filter(w_icon, 1);
             g_mlt_place_wgt(self, w_icon, rect_tab6, 1);
-            g_mlt_place_wgt(self, w_bar,  rect_tab6, 1);
+
+            if (g_tab7_fg_w > 0u && g_tab7_fg_w <= 160u &&
+                g_tab7_fg_h > 0u && g_tab7_fg_h <= 100u) {
+                rect_bar6[0] = (int16_t)(533 + ((91 - (int)g_tab7_fg_w) / 2));
+                rect_bar6[1] = (int16_t)((66 - (int)g_tab7_fg_h) / 2);
+                rect_bar6[2] = (int16_t)g_tab7_fg_w;
+                rect_bar6[3] = (int16_t)g_tab7_fg_h;
+            }
+            if (g_icon_set_scaling)
+                g_icon_set_scaling(w_bar, 0);
+            g_mlt_place_wgt(self, w_bar, rect_bar6, 1);
+
+            if (a7r3_pm_readable(w_bg, 4u)) {
+                const unsigned long *vt = (const unsigned long *)(uintptr_t)(*(const unsigned long *)w_bg);
+                if (vt && a7r3_pm_readable(vt, (GEN_ICON_SET_IMG_VT_IDX + 1u) * 4u)) {
+                    gen_icon_set_img_fn set_img = (gen_icon_set_img_fn)vt[GEN_ICON_SET_IMG_VT_IDX];
+                    if (set_img)
+                        set_img(w_bg, SONY_TAB_BG_6TAB, 0);
+                }
+            }
             g_mlt_hits++;
         }
     }
@@ -567,6 +609,21 @@ int a7r3_native_tab7_install(void)
     }
     g_vu2_base = vu2_base;
     g_obj_base = obj_base;
+    g_icon_set_scaling = (gen_icon_set_bool_fn)(obj_base + LIBOBJ_ICON_SET_SCALING);
+    g_icon_set_filter  = (gen_icon_set_bool_fn)(obj_base + LIBOBJ_ICON_SET_FILTER);
+
+    {
+        res_get_img_size_fn get_sz = (res_get_img_size_fn)(obj_base + LIBOBJ_RES_GET_IMG_SIZE);
+        uint16_t bg_w = 0u, bg_h = 0u, ref_w = 0u, ref_h = 0u;
+        g_tab7_fg_w = 0u;
+        g_tab7_fg_h = 0u;
+        get_sz(SONY_TAB7_BG_NORM, &bg_w, &bg_h);
+        get_sz(SONY_TAB7_FG_ICON, &g_tab7_fg_w, &g_tab7_fg_h);
+        get_sz(0x020cc117u, &ref_w, &ref_h);
+        a7r3_log_hex("SDK_TAB7_BG_SZ=", ((unsigned long)bg_w << 16) | bg_h);
+        a7r3_log_hex("SDK_TAB7_FG_SZ=", ((unsigned long)g_tab7_fg_w << 16) | g_tab7_fg_h);
+        a7r3_log_hex("SDK_TAB7_REF_SZ=", ((unsigned long)ref_w << 16) | ref_h);
+    }
 
     /* 1. Verify CmnViewSettingNode menu root */
     root = (struct cmn_setting_node *)(vu2_base + VU2_MENU_ROOT_OFF);
