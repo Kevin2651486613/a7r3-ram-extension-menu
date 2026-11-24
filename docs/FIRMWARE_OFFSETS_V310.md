@@ -53,6 +53,10 @@
 
 | 符号 / 状态变量 | 类型 | 相对基址偏移 | 备注 |
 | --- | --- | --- | --- |
+| `CmnViewSettingNode` 活动菜单树根 | 全局对象 (`40 B`) | `0x00a51c60` | 原生 `count = 6`，可扩展为 `7`（`a7r3_native_tab7.c`） |
+| `PAS_MenuListTab` 更新虚表槽 | vtable `+0x1ac` / Real | `0x008bcb7c` / `0x0056ef3d` | 后置摆放第 7 大类控件（`m_tabCount @ +0x1c8`, 图标 `+0x1840`, 焦条 `+0x2720`） |
+| `PAS_MenuListTab` 控件布局函数 (Thumb) | 内部函数 | `0x0056d71b` | `(self, widget, int16 rect[4], visible)` |
+| `CmnViewProcessDataMgr` guard / inst / vptr | 全局单例 | `0x00a48b0c` / `0x00a48b10` / `0x00867ae0` | 槽位 `getValue(+0x0c)`, `isGray(+0x24/+0x2c)`, `isDis(+0x34/+0x38)`, `setVal(+0x44)`, `exec(+0x54)` |
 | `CmnViewProcessDataMgr` guard / inst | 全局指针 | `0x00a48b0c` / `0x00a48b10` | `a7r3_entry_cert.c` |
 | `CertificationLogo` getter (Thumb) | 函数 | `0x003ec7b9` | `proc_id = 0x10f` |
 | `CertificationLogo` guard / inst | 全局指针 | `0x00a6f380` / `0x00a6f384` | `a7r3_entry_cert.c` |

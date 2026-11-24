@@ -1,14 +1,20 @@
-# Sony ILCE-7RM3 (A7R3 v3.10) 纯内存 Material Design 3 拓展菜单与逆向工具集
+# Sony ILCE-7RM3 (A7R3 v3.10) 原生第 7 大类拓展菜单（Route A1 分支）
 
+[![Branch](https://img.shields.io/badge/Branch-feat%2Fnative--tab7--a1%20(Route%20A1)-purple.svg)]()
 [![Status](https://img.shields.io/badge/Status-Experimental%20%2F%20R%26D%20Only-orange.svg)]()
 [![Compliance](https://img.shields.io/badge/Firmware-Zero%20Proprietary%20Assets-blue.svg)]()
 [![Safety](https://img.shields.io/badge/Mode-Pure%20RAM%20(%2Ftmp__bt)-brightgreen.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-green.svg)]()
 
+> [!NOTE]
+> **分支版本说明**：
+> - `main`（Tag: `v1.0-md3`）：Material Design 3 自绘卡片菜单版（通过劫持设置第 7 页「认证标识」弹出）。
+> - **`feat/native-tab7-a1`（当前分支）**：**原生索尼 UI 第 7 大类版（Route A1）**——无需任何全屏显存自绘与防闪烁守卫，直接在原厂 `MENU` 顶栏新增第 7 个大类 Tab，使用原厂 GPU 渲染与索尼中文字库、原生二级选择弹窗与拨轮/按键交互。
+
 > [!WARNING]
 > **测试开发与合规声明（必读）**：
-> 1. **仅限测试开发**：本工程为 **实验性（Experimental）研究与二次开发框架**，当前仍存在不稳定问题（例如部分场景下的 UI 卡顿/兼容边界情况），**切勿用于商业或重要拍摄**；**欢迎社区基于本框架进行二次开发与改进**。
-> 2. **零固件 / 合规仓库**：为遵守开源与版权规范，本仓库**已彻底剔除**所有 Sony 原厂固件二进制、原厂布局数据字节（`a7r3_dual_hud_payload` 已解耦为本地可选文件）及预生成字体位图（`md3_demo_labels.h` 改为本地字体实时生成），仅保留原创纯内存工具、SDK 源码与逆向思路文档。详情请务必阅读 **[DISCLAIMER.md](DISCLAIMER.md)**。
+> 1. **仅限测试开发**：本工程与分支为 **实验性（Experimental）研究与二次开发框架**，当前仍存在潜在不稳定与边界兼容性风险，**切勿用于商业或重要拍摄**；**欢迎社区基于本框架进行二次开发与改进**。
+> 2. **零固件 / 合规仓库**：为遵守开源与版权规范，本仓库**已彻底剔除**所有 Sony 原厂固件二进制、原厂布局数据字节（`a7r3_dual_hud_payload` 已解耦为本地可选文件）及预生成字体位图，Route A1 亦**不包含任何 `.uxc` 修改后的布局二进制**，仅通过纯 C 逻辑动态调用原厂控件，详情请阅读 **[DISCLAIMER.md](DISCLAIMER.md)**。
 
 一个面向 **Sony ILCE-7RM3（α7R III，目标固件版本 v3.10）** 的**纯内存（Pure-RAM）动态拓展框架、工具链与逆向思路整理仓库**。
 
@@ -31,7 +37,8 @@
 
 | 功能模块 | 源码 | 核心逆向/实现思路 |
 | --- | --- | --- |
-| 原生菜单无痕入口 + MD3 双页 UI | [a7r3_entry_cert.c](src/a7r3_entry_cert.c) / [demo_cert_entry.c](src/demo_cert_entry.c) | 解除隐藏并切换设置第 7 页原「认证标识 (`0x10f`)」`vptr`，配合 `TextSprite::SetString` GOT 替换为「拓展菜单」；支持主题下拉框（靛蓝/琥珀/青绿）、左下角翻页、实体按键+触屏、外部事件同步退让 |
+| **原生第 7 大类 UI（Route A1 主线）** | [a7r3_native_tab7.c](src/a7r3_native_tab7.c) / [demo_native_tab7.c](src/demo_native_tab7.c) | 扩展 `viewUnified2` 活动设置树（`0x00a51c60`）为 7 个大类（2 页共 9 项原厂条目）；利用 `PAS_MenuListTab` 预留第 7 槽配合 `0x008bcb7c` 虚表后置定位 `{533, 0, 91, 66}`；切换 `CmnViewProcessDataMgr` `vptr` 在纯 RAM 中托管自定义 `proc_id (0x7f01..0x7f09)`；经 `TextSprite::SetString` 注入原厂字体 UTF-8 标签 |
+| 原生菜单无痕入口 + MD3 双页 UI（兼容保留） | [a7r3_entry_cert.c](src/a7r3_entry_cert.c) / [demo_cert_entry.c](src/demo_cert_entry.c) | 解除隐藏并切换「认证标识 (`0x10f`)」`vptr`，在纯 RAM 显存绘制 MD3 双页卡片（位于 `main` / `v1.0-md3`，仍可单独编译） |
 | 屏蔽曝光补偿波轮 | [a7r3_input.c](src/a7r3_input.c) | 钩住 `osal_rcv_msg_tmo`、`get_phy` / `get_ev` 并拦截 `0x70d2` / `0x70d3`，将物理 EV 拨盘输入固定为 0 |
 | 水平仪与直方图同显（可选本地载荷） | [a7r3_dual_hud.c](src/a7r3_dual_hud.c) | 钩住 `getResID` / `RecDtor` / `UserGetLayoutMode` / 路由槽；**默认无载荷透传编译**，用户可自行提供本地提取修改的 `src/a7r3_dual_hud_payload.local.h` 启用 |
 | 相册回放显示对焦点 | [a7r3_pb_focus.c](src/a7r3_pb_focus.c) | `FeaCore` + `PlayStillSingle` 捕获 EXIF，机内解析 Sony MakerNote (`0x2027`) 对焦坐标并叠绘像素级无损红框，兼容连拍组/DISP/缩放/MENU 退让 |
@@ -87,7 +94,10 @@ python tools/a7r3_addon_console.py check
 ### 2. 编译插件 `.so`
 
 ```powershell
-# 编译完整拓展菜单（首次编译若缺少 src/md3_demo_labels.h，将自动从系统字体生成）
+# 编译原生第 7 大类（Route A1，无需生成字体位图，推荐）
+python tools/build_addon.py --src src/demo_native_tab7.c --out build/demo_native_tab7_ram.so
+
+# 若需同时编译 MD3 自绘菜单版：
 python tools/build_addon.py --src src/demo_cert_entry.c --out build/demo_cert_entry_ram.so
 ```
 

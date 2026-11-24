@@ -145,4 +145,14 @@ DSP / 音频服务异步播放 (< 1ms 投递返回，连拍不堵队列)
    - 解析标准 RIFF/`fmt `/`data` 块（支持 8/16/24-bit PCM 以及 `WAVE_FORMAT_EXTENSIBLE 0xFFFE`）；
    - 双声道自动混缩为单声道，使用无除法器依赖的定点累加器（`u64_div_u32`）线性重采样至 `24000 Hz`；
    - 按每 31 个采样点打包成 1 个 32 字节的 Sony BFP 块（1 字节指数 `lo ∈ [0..8]` + 31 字节 `int8_t` 尾数，最长截断于 32 KB ≈ 0.68 s）；
-   - 经 `DmmCh`（分配/打开 `APP_UNIT_TYPE 0x00070817`）+ `AvbbcPhycMem` 映射到进程虚拟地址写入数据，再通过 `AdfCh::SysSetTable(..., CUSTOM_KIND_ID = 9, ...)` 注册，确保切换到自定义音效时原厂 BEEP 音效依然保留。
+---
+
+## 9. 原生第 7 大类拓展菜单 (`a7r3_native_tab7.c` / Route A1)
+
+与自绘 MD3 叠层不同，Route A1 直接将拓展功能融入索尼原厂 `ViewSettingMenu` + `PAS_MenuListTab` 管线，全程由原厂 GPU 与系统字库渲染，彻底避免全屏显存拷贝和 `ioctl` 重绘冲突：
+
+1. **`CmnViewSettingNode` 树扩展 (`0x00a51c60`)**：在内存中构造精确的 40 字节 `cmn_setting_node` 节点树（1 个 Tab 根节点 `g_tab7_node` → 2 个 Page 节点 → 9 个 SettingItem 节点 + 选项子节点），保持 `parent = NULL` 交由原厂 `CmnViewSettingNode::init()` 自动建立父子索引；复制 `root->children[0..5]` 到 `g_root_children7[0..5]` 并追加 `&g_tab7_node`，原子修改 `root->children` 与 `root->count = 7`。
+2. **`PAS_MenuListTab` 预留第 7 槽后置排版 (`0x008bcb7c`)**：A7R3 的 `PAS_MenuListTab` 内部继承了早期 PMCA 7 大类内存布局（为 `0..6` 分配了 7 份图标与高亮条子控件），但 `.rodata` 坐标表第 `[6]` 项为全 0。钩住 `PAS_MenuListTab` 虚表更新函数（`+0x1ac`），在原函数返回后检测到 `m_tabCount (this+0x1c8) >= 7` 时，调用原厂 `place_wgt (0x0056d71b)` 将第 7 槽图标（`this+0x1840`）与聚焦条（`this+0x2720`）精确放置在 `{ 533, 0, 91, 66 }`（紧接前 6 个 `x = 17, 103, 189, 275, 361, 447` 的 `86px` 等距步进）。
+3. **`CmnViewProcessDataMgr` 纯内存状态托管 (`0x00a48b10`)**：复制原厂单例虚表并拦截 `getValue (+0x0c)`、`isGrayout (+0x24/+0x2c)`、`isDisable (+0x34/+0x38)`、`setValue (+0x44)`、`exec (+0x54)`。凡自定义 `proc_id ∈ [0x7f01..0x7f09]` 均在 RAM 中路由到对应 SDK 开关或动态 SD 音效索引（其中 `0x7f07` 通过 `isDisableByVal` 实时隐藏超出 `a7r3_shutter_sfx_count()` 的空槽位），不触碰机身 `Backup` 存储。
+4. **原厂字体 UTF-8 动态解析 (`TextSprite::SetString`)**：为新树节点分配合成资源 ID `0x7f010001..0x7f0100ff`，在 `TextSprite::SetString(res_id)` GOT 钩子中实时转向 `TextSprite::SetString(const char *utf8)`，直接使用原厂抗锯齿中文字体渲染标题、说明及 SD 卡 WAV 文件名。
+

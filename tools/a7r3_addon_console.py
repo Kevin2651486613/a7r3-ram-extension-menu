@@ -31,15 +31,17 @@ from deploy_ram import (  # noqa: E402
     validate_arm32_shared_elf,
 )
 
-DEFAULT_SO = SDK_DIR / "build" / "demo_cert_entry_ram.so"
-DEFAULT_SRC = SDK_DIR / "src" / "demo_cert_entry.c"
+DEFAULT_SO = SDK_DIR / "build" / "demo_native_tab7_ram.so"
+DEFAULT_SRC = SDK_DIR / "src" / "demo_native_tab7.c"
 GEN_ASSETS = TOOLS_DIR / "gen_md3_assets.py"
 BUILD_SCRIPT = TOOLS_DIR / "build_addon.py"
 
 HOOK_CHECKS = (
-    ("SDK_CERT_ALIVE", "后台工作线程存活"),
-    ("SDK_CERT_AFTER_DIS=0x0", "认证标识入口已解除隐藏"),
-    ("SDK_CERT_LABEL_HOOK=0x1", "原生菜单文字替换 (拓展菜单)"),
+    ("SDK_TAB7_ALIVE", "后台工作线程存活"),
+    ("SDK_TAB7_TEXT_HOOK=0x1", "原生 TextSprite UTF-8 渲染钩子"),
+    ("SDK_TAB7_MGR_HOOK=0x1", "CmnViewProcessDataMgr 纯内存虚表钩子"),
+    ("SDK_TAB7_MLT_HOOK=0x1", "PAS_MenuListTab 第 7 大类排版钩子"),
+    ("SDK_TAB7_INSTALLED=0x1", "原生第 7 大类设置树节点挂载"),
     ("SDK_EV_HOOKS=0x1", "曝光补偿波轮屏蔽钩子"),
     ("SDK_DUAL_HOOKS=0x1", "水平仪与直方图同显模块"),
     ("SDK_PB_HOOKS=0x1", "相册显示焦点位置钩子"),
@@ -47,6 +49,7 @@ HOOK_CHECKS = (
 )
 
 RESTORE_MARKERS = (
+    "SDK_TAB7_RESTORED=",
     "SDK_CERT_RESTORED=",
     "SDK_SFX_RESTORED=",
     "SDK_PB_RESTORED=",
@@ -112,15 +115,15 @@ def read_log(sh, tail_lines: int = 0) -> str:
 
 
 def is_addon_running(log_text: str) -> bool:
-    last_alive = log_text.rfind("SDK_CERT_ALIVE")
+    last_alive = max(log_text.rfind("SDK_TAB7_ALIVE"), log_text.rfind("SDK_CERT_ALIVE"))
     if last_alive < 0:
         return False
-    last_quit = log_text.rfind("SDK_CERT_QUIT")
+    last_quit = max(log_text.rfind("SDK_TAB7_QUIT"), log_text.rfind("SDK_CERT_QUIT"))
     return last_alive > last_quit
 
 
 def current_boot_segment(log_text: str) -> str:
-    idx = log_text.rfind("SDK_CERT_ALIVE")
+    idx = max(log_text.rfind("SDK_TAB7_ALIVE"), log_text.rfind("SDK_CERT_ALIVE"))
     return log_text[idx:] if idx >= 0 else log_text
 
 
@@ -150,18 +153,20 @@ def safe_quit(sh, timeout_s: float = 4.0) -> bool:
     while time.time() < deadline:
         time.sleep(0.25)
         latest_log = read_log(sh, tail_lines=40)
-        if not is_addon_running(latest_log) and "SDK_CERT_QUIT" in latest_log:
+        if not is_addon_running(latest_log) and (
+            "SDK_TAB7_QUIT" in latest_log or "SDK_CERT_QUIT" in latest_log
+        ):
             break
 
     if is_addon_running(latest_log):
         raise RuntimeError(
-            f"等待 {timeout_s:.1f}s 后旧实例仍未确认退出 (未检测到 SDK_CERT_QUIT)。"
+            f"等待 {timeout_s:.1f}s 后旧实例仍未确认退出 (未检测到退出标记)。"
             "为防止重复挂钩造成相机崩溃，已中止部署；请重启相机后再试。"
         )
 
     print("[+] 已安全卸载并恢复全部原生钩子:")
     for line in latest_log.splitlines()[-15:]:
-        if any(m in line for m in RESTORE_MARKERS) or "SDK_CERT_QUIT" in line:
+        if any(m in line for m in RESTORE_MARKERS) or "SDK_TAB7_QUIT" in line or "SDK_CERT_QUIT" in line:
             print(f"    {line}")
     return True
 
@@ -245,7 +250,7 @@ def action_deploy(so_path: Path, force: bool = False) -> int:
         time.sleep(0.3)
         log_text = read_log(sh)
         print_hook_summary(log_text)
-        print("\n[+] 部署完成! 使用方式: 相机按 MENU -> 设置第 7 页 -> 拓展菜单 (原认证标识)")
+        print("\n[+] 部署完成! 使用方式: 相机按 MENU -> 顶栏第 7 个大类 (拓展菜单)")
         return rc
 
 
@@ -290,13 +295,17 @@ def action_quit(force: bool = False) -> int:
 
 def action_build(so_path: Path) -> int:
     validate_runtime_env()
-    print("[*] 步骤 1/2: 生成 MD3 中文点阵字模...")
-    res1 = subprocess.run([sys.executable, str(GEN_ASSETS)], capture_output=False)
-    if res1.returncode != 0:
-        print(f"[!] 字模生成失败 (exit={res1.returncode})")
-        return res1.returncode
+    src_text = DEFAULT_SRC.read_text(encoding="utf-8", errors="replace")
+    if "md3_demo_labels.h" in src_text:
+        print("[*] 步骤 1/2: 生成 MD3 中文点阵字模...")
+        res1 = subprocess.run([sys.executable, str(GEN_ASSETS)], capture_output=False)
+        if res1.returncode != 0:
+            print(f"[!] 字模生成失败 (exit={res1.returncode})")
+            return res1.returncode
+        print("[*] 步骤 2/2: 交叉编译 ARMv7 纯内存插件 (.so)...")
+    else:
+        print("[*] 交叉编译原生第 7 大类 (Route A1) 纯内存插件 (.so)...")
 
-    print("[*] 步骤 2/2: 交叉编译 ARMv7 纯内存插件 (.so)...")
     res2 = subprocess.run(
         [sys.executable, str(BUILD_SCRIPT), "--src", str(DEFAULT_SRC), "--out", str(so_path)],
         capture_output=False,
@@ -327,14 +336,14 @@ def print_banner(so_path: Path) -> None:
         so_info = "未编译 (需先选 5 或 6)"
 
     print("=" * 64)
-    print("  Sony ILCE-7RM3 (A7R3 v3.10) 纯内存拓展菜单控制台")
+    print("  Sony ILCE-7RM3 (A7R3 v3.10) 原生第 7 大类拓展菜单控制台 (Route A1)")
     print("  [测试开发版] 存在潜在不稳定风险 · 仅写入 /tmp_bt 与 RAM")
     print("=" * 64)
     print(f"  目标插件: {so_path.name} -> {so_info}")
     print("-" * 64)
     print("  [1] 一键部署到相机内存 (如已运行则先自动卸载旧版)")
     print("  [2] 查看相机连接与运行状态 / 日志")
-    print("  [3] 立即在相机屏幕上弹出 MD3 拓展菜单")
+    print("  [3] 立即弹出叠加菜单 (仅 MD3 模式有效)")
     print("  [4] 安全卸载插件并恢复原生钩子 (不重启相机)")
     print("  [5] 重新编译插件 (.so)")
     print("  [6] 一键编译并热更新部署到相机")
