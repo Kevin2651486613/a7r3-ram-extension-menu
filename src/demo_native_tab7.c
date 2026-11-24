@@ -4,6 +4,7 @@
 #include "a7r3_dual_hud.h"
 #include "a7r3_pb_focus.h"
 #include "a7r3_shutter_sfx.h"
+#include "a7r3_menu_touch.h"
 #include "a7r3_native_tab7.h"
 
 #define GATE_ARM  "/tmp_bt/addon_arm"
@@ -42,6 +43,7 @@ static void *native_tab7_worker(void *arg)
     a7r3_pb_focus_install();
     a7r3_shutter_sfx_install();
     a7r3_shutter_sfx_refresh_state();
+    a7r3_menu_touch_install();
 
     if (a7r3_native_tab7_install() != 0)
         a7r3_log_str("SDK_TAB7_INSTALL_ERR\n");
@@ -50,8 +52,9 @@ static void *native_tab7_worker(void *arg)
         unsigned now;
         unsigned mh = 0, gh = 0, th = 0;
         unsigned dp = 0, dg = 0, dr = 0;
+        unsigned mt_taps = 0, mt_acts = 0;
 
-        a7r3_nanosleep_ms(25u);
+        a7r3_nanosleep_ms(a7r3_menu_touch_get_enabled() ? 15u : 25u);
         now = a7r3_now_ms();
 
         if ((unsigned)(now - last_gate_ms) >= 200u) {
@@ -61,8 +64,10 @@ static void *native_tab7_worker(void *arg)
                 a7r3_dual_hud_set_enabled(0);
                 a7r3_pb_focus_set_enabled(0);
                 a7r3_shutter_sfx_set_enabled(0);
+                a7r3_menu_touch_set_enabled(0);
 
                 a7r3_native_tab7_remove();
+                a7r3_menu_touch_remove();
                 a7r3_shutter_sfx_uninstall();
                 a7r3_pb_focus_remove();
                 a7r3_dual_hud_remove();
@@ -79,7 +84,13 @@ static void *native_tab7_worker(void *arg)
             a7r3_shutter_sfx_refresh_state();
         }
 
+        a7r3_menu_touch_tick();
         a7r3_pb_focus_tick(0);
+
+        if (a7r3_menu_touch_take_stats(&mt_taps, &mt_acts)) {
+            a7r3_log_hex("SDK_MTOUCH_TAPS=", (unsigned long)mt_taps);
+            a7r3_log_hex("SDK_MTOUCH_ACTS=", (unsigned long)mt_acts);
+        }
 
         if (a7r3_native_tab7_take_stats(&mh, &gh, &th)) {
             a7r3_log_hex("SDK_TAB7_MLT_HITS=", (unsigned long)mh);

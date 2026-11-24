@@ -28,10 +28,21 @@ struct raw_ev {
     unsigned w0, w1, w2, w3;
 };
 
+struct tap_ev {
+    int x, y;
+};
+
 static struct raw_ev g_key_ring[EVQ_SZ];
 static volatile unsigned g_key_head, g_key_tail;
 static struct raw_ev g_tp_ring[EVQ_SZ];
 static volatile unsigned g_tp_head, g_tp_tail;
+static struct tap_ev g_tap_ring[EVQ_SZ];
+static volatile unsigned g_tap_head, g_tap_tail;
+static volatile int g_tp_tap_watch;
+static int g_tap_down;
+static unsigned g_tap_last_w1;
+
+static void calibrate_touch(unsigned packed_xy, int *ox, int *oy);
 
 static volatile unsigned long *g_osal_got;
 static osal_rcv_fn g_orig_osal_rcv;
@@ -195,6 +206,29 @@ static int nm_osal_rcv_hook(unsigned qid, void **msg_out, int timeout)
                     continue;
                 }
             }
+            if (g_tp_tap_watch) {
+                if ((w[2] == 1u || w[2] == 2u) && w[1] != 0xffffffffu) {
+                    g_tap_last_w1 = w[1];
+                    g_tap_down = 1;
+                } else if (w[2] == 0u || w[2] == 3u || w[1] == 0xffffffffu) {
+                    if (g_tap_down) {
+                        unsigned raw = (w[2] == 0u && w[1] != 0xffffffffu && w[1] != 0u)
+                                           ? w[1]
+                                           : g_tap_last_w1;
+                        int tx = 0, ty = 0;
+                        unsigned h = g_tap_head;
+                        calibrate_touch(raw, &tx, &ty);
+                        if ((h - g_tap_tail) < EVQ_SZ) {
+                            struct tap_ev *e = &g_tap_ring[h & (EVQ_SZ - 1u)];
+                            e->x = tx;
+                            e->y = ty;
+                            a7r3_dsb();
+                            g_tap_head = h + 1u;
+                        }
+                        g_tap_down = 0;
+                    }
+                }
+            }
             g_native_act_seq++;
             return rc;
         }
@@ -284,24 +318,33 @@ static void capture_ev_phy_cache(unsigned *out_nonzero_code,
     }
 }
 
-static void send_ev_synth(unsigned key_code, unsigned w1, unsigned w2)
+static int send_input_msg4(unsigned w0, unsigned w1, unsigned w2, unsigned w3)
 {
     unsigned qid = g_last_input_qid;
     void *msg = NULL;
     unsigned *w;
 
     if (!g_osal_valloc || !g_osal_snd_msg)
-        return;
+        return -1;
     if (g_osal_valloc(qid, &msg, 16u, 100) != 0 || !msg)
-        return;
+        return -1;
     w = (unsigned *)msg;
-    w[0] = key_code;
+    w[0] = w0;
     w[1] = w1;
     w[2] = w2;
-    w[3] = EV_SYNTH_TAG;
+    w[3] = w3;
     a7r3_dsb();
-    if (g_osal_snd_msg(qid, msg) != 0 && g_osal_free_msg)
-        g_osal_free_msg(qid, msg);
+    if (g_osal_snd_msg(qid, msg) != 0) {
+        if (g_osal_free_msg)
+            g_osal_free_msg(qid, msg);
+        return -1;
+    }
+    return 0;
+}
+
+static void send_ev_synth(unsigned key_code, unsigned w1, unsigned w2)
+{
+    (void)send_input_msg4(key_code, w1, w2, EV_SYNTH_TAG);
 }
 
 int a7r3_input_install(void)
@@ -376,6 +419,8 @@ void a7r3_input_remove(void)
     g_hook_active = 0;
     g_swallow_keys = 0;
     g_swallow_touch = 0;
+    g_tp_tap_watch = 0;
+    g_tap_down = 0;
     g_ev_dial_shield = 0;
     a7r3_dsb();
     if (g_get_phy_got) {
@@ -584,4 +629,46 @@ int a7r3_input_poll_touch(struct a7r3_touch_ev *out)
 unsigned a7r3_input_native_activity_seq(void)
 {
     return g_native_act_seq;
+}
+
+int a7r3_input_send_key_click(unsigned key_code, unsigned hold_ms)
+{
+    if (hold_ms == 0u)
+        hold_ms = 20u;
+    if (send_input_msg4(key_code, 0u, 1u, 0u) != 0)
+        return -1;
+    a7r3_nanosleep_ms(hold_ms);
+    if (send_input_msg4(key_code, 0u, 0u, 0u) != 0)
+        return -1;
+    return 0;
+}
+
+void a7r3_input_set_touch_tap_watch(int enable)
+{
+    int on = enable ? 1 : 0;
+    if (on == g_tp_tap_watch)
+        return;
+    g_tp_tap_watch = 0;
+    a7r3_dsb();
+    g_tap_tail = g_tap_head;
+    g_tap_down = 0;
+    g_tap_last_w1 = 0u;
+    a7r3_dsb();
+    g_tp_tap_watch = on;
+    a7r3_dsb();
+}
+
+int a7r3_input_poll_touch_tap(int *out_x, int *out_y)
+{
+    struct tap_ev e;
+    if (g_tap_tail == g_tap_head)
+        return 0;
+    e = g_tap_ring[g_tap_tail & (EVQ_SZ - 1u)];
+    a7r3_dsb();
+    g_tap_tail++;
+    if (out_x)
+        *out_x = e.x;
+    if (out_y)
+        *out_y = e.y;
+    return 1;
 }

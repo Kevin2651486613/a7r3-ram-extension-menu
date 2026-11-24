@@ -34,8 +34,10 @@
 | `InfraInput::GetEv` | GOT / Real (Thumb) | GOT `0x0121ac2c` / Real `0x0084c765` | `a7r3_input.c` |
 | `s_InfraTp` 指针 | 全局指针 | `0x012d4ebc` | `a7r3_input.c` |
 | `s_InfraInput` 指针 | 全局指针 | `0x012d4ee8` | `a7r3_input.c` |
-| `TextSprite::SetString(res_id)` | GOT / Real (Thumb) | GOT `0x0121aa9c` / Real `0x005dbe09` | `a7r3_entry_cert.c` |
-| `TextSprite::SetString(utf8)` | Real (Thumb) | `0x005dbfa1` | `a7r3_entry_cert.c` |
+| `TextSprite::SetString(res_id)` | GOT / Real (Thumb) | GOT `0x0121aa9c` / Real `0x005dbe09` | `a7r3_entry_cert.c` / `a7r3_native_tab7.c` |
+| `TextSprite::SetString(utf8)` | Real (Thumb) | `0x005dbfa1` | `a7r3_entry_cert.c` / `a7r3_native_tab7.c` |
+| `GEN_Icon::setScalingFlag` / `setImageFilter` | Real (Thumb) | `0x003cfc4f` / `0x003cfe91` | `a7r3_native_tab7.c`（缩放 105×66 → 91×66） |
+| `ResourceManager::getImageSize` | Real (Thumb) | `0x005c63e5` | `a7r3_native_tab7.c`（查询资源像素尺寸） |
 | `getResID` | GOT / Real (Thumb) | GOT `0x0121a5c0` / Real `0x00798d31` | `a7r3_dual_hud.c` |
 | `RecDtor` | GOT / Real (Thumb) | GOT `0x0121a51c` / Real `0x00798d23` | `a7r3_dual_hud.c` |
 | `ResourceLayoutParser` 调用返回点 | Text 返回地址 | `0x0059feca` | `a7r3_dual_hud.c` |
@@ -54,8 +56,15 @@
 | 符号 / 状态变量 | 类型 | 相对基址偏移 | 备注 |
 | --- | --- | --- | --- |
 | `CmnViewSettingNode` 活动菜单树根 | 全局对象 (`40 B`) | `0x00a51c60` | 原生 `count = 6`，可扩展为 `7`（`a7r3_native_tab7.c`） |
-| `PAS_MenuListTab` 更新虚表槽 | vtable `+0x1ac` / Real | `0x008bcb7c` / `0x0056ef3d` | 后置摆放第 7 大类控件（`m_tabCount @ +0x1c8`, 图标 `+0x1840`, 焦条 `+0x2720`） |
-| `PAS_MenuListTab` 控件布局函数 (Thumb) | 内部函数 | `0x0056d71b` | `(self, widget, int16 rect[4], visible)` |
+| `PAS_MenuListTab` 更新虚表槽 | vtable `+0x1ac` / Real | `0x008bcb7c` / `0x0056ef3d` | 后置摆放第 7 槽与重设底框 `0x020cc146`（底框 `+0x960`, 图标 `+0x1840`, 前景 `+0x2720`） |
+| `PAS_MenuListTab` 控件布局 / 行数查询 | 内部函数 (Thumb) | `0x0056d71b` / `0x0056d5c3` | `place_wgt` / `getCurPageRowCount(self, cat, page)` |
+| `PAS_MenuListTab` 导航目标槽 (`vptr 0x8bc9d0`) | vtable `+0x1b0` / `+0x1b4` | `0x008bcb80` (`0x56e69b`) / `0x008bcb84` (`0x56e653`) | `a7r3_menu_touch.c`（行/大类一步直达，无 `.text` 改写） |
+| `ViewSettingMenu` (`vptr 0x863890`) | `~D1` / `~D0` / `onEvent` | `0x008638b0` (`0x207515`) / `0x008638b4` (`0x207581`) / `0x0086397c` (`0x210b31`) | `state @ +0x04`, `level @ +0x130`, `cat/page/row/opt @ +0x134..+0x140` |
+| `PAS_MenuListPopup` 子对象与计数 | 偏移 / Real (Thumb) | `mlt+0x0f7c8` (`max_vis +0x15ac8`, `top +0x15ad4`, `open +0x15ad6`) / `0x0053be95` | 弹窗可见窗口偏移、开关标志与选项数查询 |
+| `PAS_MenuListCategorizedItem` (`vptr 0x8bf088`) | vtable `+0x1ac` / `+0x1b0` | `0x008bf234` (`0x57dcc9`) / `0x008bf238` (`0x57d5cd`) | 自定义按键列表（`rows @ +0x1c8`, `row @ +0x1d0`） |
+| `PAS_MenuListGroupedItem` (`vptr 0x8b41e0`) | vtable `+0x1ac` / `+0x1b0` | `0x008b438c` (`0x53871d`) / `0x008b4390` (`0x5384f5`) | 功能分配页（`rows @ +0x1c4`, `row @ +0x1cc`） |
+| `PAS_MenuDataSelectBelt` / `Caution` 标志 | vptr / 全局状态字 | `0x008b3ad0` / `0x00a6cd2c` (bit 14 = `0x4000`) | 白平衡滚轮基类 / 原厂「不可设定」提示标志 |
+| 第 7 大类与顶栏复用图标资源 ID | `.uxc` 资源常量 | 底框 `0x020cc146`、前景 `0x0205cb79`、底色 `0x0205d9b5/b7/b4` | `GEN_Icon::setImage (vtable +0x104)` |
 | `CmnViewProcessDataMgr` guard / inst / vptr | 全局单例 | `0x00a48b0c` / `0x00a48b10` / `0x00867ae0` | 槽位 `getValue(+0x0c)`, `isGray(+0x24/+0x2c)`, `isDis(+0x34/+0x38)`, `setVal(+0x44)`, `exec(+0x54)` |
 | `CmnViewProcessDataMgr` guard / inst | 全局指针 | `0x00a48b0c` / `0x00a48b10` | `a7r3_entry_cert.c` |
 | `CertificationLogo` getter (Thumb) | 函数 | `0x003ec7b9` | `proc_id = 0x10f` |
@@ -70,6 +79,13 @@
 | `ViewSinglePb` vtable `EXIT` | Slot / Real | `0x00861a54` (`0x1f79bd`) | `a7r3_pb_focus.c` |
 | `GetDispType` | GOT / Real (Thumb) | `0x008cc9d4` / `0x003cdc45` | `a7r3_pb_focus.c` |
 | 回放状态字节 | 全局标志 | `CUR_PB_BASE=0x00a6cd2c`, `ENLARGE=0x00a6cd36`, `MOVIE=0x00a6cd53`, `GROUP_STAT=0x00a6e1e8`, `CONT_GRP=0x00a6e1e9` | `a7r3_pb_focus.c` |
+
+### `viewUnified7.so`（白平衡专用设置页）
+
+| 符号 / 字段 | 类型 | 相对基址偏移 | 备注 |
+| --- | --- | --- | --- |
+| `ViewWhiteBalance` (`vptr 0x07dd10`) | `~D1` / `~D0` / `onEvent` | `0x0007dd30` (`0x2a6f9`) / `0x0007dd34` (`0x2a741`) / `0x0007ddfc` (`0x2d851`) | `state @ +0x04`, `belt 指针 @ +0x194` |
+| `PAS_MenuDataSelectBelt` 内部状态 | 成员偏移 | `list_num @ +0x0af8`, `raw_pos @ +0x0b18` | `list_num = 18`, `cur_pos = raw_pos % 18` |
 
 ### `libmpr.so`
 
@@ -158,7 +174,7 @@ struct adf_sysreq_msg {
 | 常量 | 键值 | 说明 |
 | --- | --- | --- |
 | `A7R3_KEY_UP` / `DOWN` / `LEFT` / `RIGHT` | `0x003` / `0x030` / `0x015` / `0x1af` | 十字方向键 |
-| `A7R3_KEY_ENTER` / `MENU` | `0x1ac` / `0x1ab` | 中央确认键 / MENU 键 |
+| `A7R3_KEY_ENTER` / `MENU` / `FN` | `0x1ac` / `0x1ab` / `0x7095` | 中央确认键 / MENU 键 / Fn（大类切换） |
 | `A7R3_KEY_EV_DIAL1` / `EV_DIAL2` | `0x70d2` / `0x70d3` | 物理曝光补偿拨盘 |
 | `A7R3_KEY_EYE_CONTACT` / `FINDER_LCD` | `0x708b` / `0x708f` | EVF 眼传感器 / 取景器屏幕切换 |
 | `A7R3_KEY_EVF_OPEN` / `CLOSE` / `PANEL_TILT` | `0x01d5` / `0x01d6` / `0x70ef` | 取景器与翻转屏状态事件 |

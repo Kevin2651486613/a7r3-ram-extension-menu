@@ -28,6 +28,7 @@ CORE_SRCS = [
     SRC_DIR / "a7r3_pb_focus.c",
     SRC_DIR / "a7r3_entry_cert.c",
     SRC_DIR / "a7r3_shutter_sfx.c",
+    SRC_DIR / "a7r3_menu_touch.c",
     SRC_DIR / "a7r3_native_tab7.c",
 ]
 

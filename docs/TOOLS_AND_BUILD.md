@@ -54,13 +54,13 @@ copy .env.example .env.local
 ### 常用构建命令
 
 ```powershell
-# 编译完整版本（原生设置第 7 页「拓展菜单」入口版，推荐）
+# 编译原生第 7 大类 + 纯内存菜单触摸版（Route A1，当前主线推荐）
+python tools/build_addon.py --src src/demo_native_tab7.c --out build/demo_native_tab7_ram.so
+
+# 编译 MD3 自绘菜单完整版（v1.0-md3 路线：原生设置第 7 页「拓展菜单」入口）
 python tools/build_addon.py --src src/demo_cert_entry.c --out build/demo_cert_entry_ram.so
 
-# 编译精简示例（右上角 EX 悬浮按钮入口版）
-python tools/build_addon.py --src src/demo_addon_menu.c --out build/demo_addon_ram.so
-
-# 如修改了中文菜单文本（SPECS），重新生成 md3_demo_labels.h
+# 如修改了 MD3 中文菜单文本（SPECS），重新生成 md3_demo_labels.h
 python tools/gen_md3_assets.py
 ```
 
@@ -76,22 +76,25 @@ python tools/a7r3_addon_console.py
 
 # 命令行一键模式：
 python tools/a7r3_addon_console.py check    # 离线检查 Python/环境变量/工具链/.so 边界有效性（无需连接相机）
-python tools/a7r3_addon_console.py build    # 自动生成字模并交叉编译 demo_cert_entry_ram.so
-python tools/a7r3_addon_console.py deploy   # 安全停掉旧实例 + 边界检查 + 部署当前 .so + 检查 7 项钩子
+python tools/a7r3_addon_console.py build    # 交叉编译当前默认产物 demo_native_tab7_ram.so
+python tools/a7r3_addon_console.py deploy   # 安全停掉旧实例 + 边界检查 + 部署当前 .so + 检查 10 项钩子
 python tools/a7r3_addon_console.py update   # 先重新编译再热部署（开发迭代最常用）
-python tools/a7r3_addon_console.py status   # 查看 PID、7 项钩子状态与最近 25 行 /tmp_bt/addon.log
-python tools/a7r3_addon_console.py open     # 遥控立即弹出 MD3 菜单卡片
+python tools/a7r3_addon_console.py status   # 查看 PID、10 项钩子状态与最近 25 行 /tmp_bt/addon.log
+python tools/a7r3_addon_console.py open     # 兼容保留（主要供 MD3 版弹窗遥控测试；原生 Tab 7 按 MENU 即见）
 python tools/a7r3_addon_console.py quit     # 安全还原所有 GOT/vptr 钩子并退出工作线程
 ```
 
 部署成功时，日志与自检输出应全部显示 `[OK]`：
-- `SDK_CERT_ALIVE`（工作线程存活）
-- `SDK_CERT_AFTER_DIS=0x0`（认证标识入口已解除隐藏）
-- `SDK_CERT_LABEL_HOOK=0x1`（原生菜单文字替换为「拓展菜单」）
+- `SDK_TAB7_ALIVE`（后台工作线程存活）
+- `SDK_TAB7_TEXT_HOOK=0x1`（原生 `TextSprite` UTF-8 渲染钩子）
+- `SDK_TAB7_MGR_HOOK=0x1`（`CmnViewProcessDataMgr` 纯内存虚表钩子）
+- `SDK_TAB7_MLT_HOOK=0x1`（`PAS_MenuListTab` 第 7 大类排版钩子）
+- `SDK_TAB7_INSTALLED=0x1`（原生第 7 大类设置树节点挂载）
 - `SDK_EV_HOOKS=0x1`（曝光补偿波轮屏蔽钩子）
-- `SDK_DUAL_HOOKS=0x1`（水平仪与直方图同显钩子）
+- `SDK_DUAL_HOOKS=0x1`（水平仪与直方图同显模块）
 - `SDK_PB_HOOKS=0x1`（相册显示焦点位置钩子）
 - `SDK_SFX_INSTALL_OK`（自定义电子快门音效钩子）
+- `SDK_MTOUCH_HOOKS=0x1`（原生菜单触摸控制钩子）
 
 ---
 

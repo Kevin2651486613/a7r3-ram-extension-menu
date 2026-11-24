@@ -1,6 +1,7 @@
 #include "a7r3_native_tab7.h"
 #include "a7r3_dual_hud.h"
 #include "a7r3_input.h"
+#include "a7r3_menu_touch.h"
 #include "a7r3_pb_focus.h"
 #include "a7r3_shutter_sfx.h"
 #include "a7r3_sys.h"
@@ -10,6 +11,7 @@
 #define VU2_MLT_UPDATE_SLOT       0x008bcb7cUL /* PAS_MenuListTab vtable +0x1ac */
 #define VU2_MLT_UPDATE_REAL       0x0056ef3dUL /* Thumb */
 #define VU2_MLT_PLACE_WGT_REAL    0x0056d71bUL /* Thumb */
+#define VU2_MLT_GET_ROW_CNT_REAL  0x0056d5c3UL /* Thumb: int(mlt*, int cat, int page) */
 #define VU2_MLT_TAB_COUNT_OFF     0x1c8u
 #define VU2_MLT_TAB_BG_OFF        0x960u
 #define VU2_MLT_TAB6_ICON_OFF     0x1840u      /* 0xb80 + 6 * 0x220 */
@@ -51,7 +53,8 @@
 #define PROC_ID_EXT_SFX_SELECT    0x7f07
 #define PROC_ID_EXT_SFX_RESCAN    0x7f08
 #define PROC_ID_EXT_RESET_ALL     0x7f09
-#define PROC_ID_EXT_MAX           0x7f09
+#define PROC_ID_EXT_MENU_TOUCH    0x7f0a
+#define PROC_ID_EXT_MAX           0x7f0a
 
 /* Custom synthetic string resource IDs */
 #define STR_SYN_BASE              0x7f010000u
@@ -77,6 +80,8 @@
 #define STR_SYN_VOL_LOW           0x7f010014u
 #define STR_SYN_VOL_MID           0x7f010015u
 #define STR_SYN_VOL_HIGH          0x7f010016u
+#define STR_SYN_TOUCH_T           0x7f010017u
+#define STR_SYN_TOUCH_G           0x7f010018u
 #define STR_SYN_SFX_ITEM_BASE     0x7f010080u
 
 /* Exact 40-byte A7R3 CmnViewSettingNode layout */
@@ -106,6 +111,7 @@ struct cmn_setting_node {
 
 typedef int  (*mlt_update_fn)(void *self);
 typedef void (*mlt_place_wgt_fn)(void *self, void *widget, const int16_t rect[4], int visible);
+typedef int  (*mlt_get_row_cnt_fn)(void *self, int cat, int page);
 typedef void (*gen_icon_set_img_fn)(void *icon, unsigned res_id, int flag);
 typedef void (*gen_icon_set_bool_fn)(void *icon, int flag);
 typedef void (*res_get_img_size_fn)(unsigned res_id, uint16_t *out_w, uint16_t *out_h);
@@ -132,6 +138,7 @@ static volatile unsigned long *g_mlt_update_slot;
 static unsigned long g_orig_mlt_update;
 static mlt_update_fn g_real_mlt_update;
 static mlt_place_wgt_fn g_mlt_place_wgt;
+static mlt_get_row_cnt_fn g_mlt_get_row_cnt;
 static gen_icon_set_bool_fn g_icon_set_scaling;
 static gen_icon_set_bool_fn g_icon_set_filter;
 static uint16_t g_tab7_fg_w;
@@ -214,11 +221,12 @@ static const struct cmn_setting_props g_page2_props = { g_page2_recs, 3 };
 DECL_TOGGLE_ITEM(g_p1_ev,   STR_SYN_EV_SHIELD_T, STR_SYN_EV_SHIELD_G, PROC_ID_EXT_EV_SHIELD)
 DECL_TOGGLE_ITEM(g_p1_dual, STR_SYN_DUAL_HUD_T,  STR_SYN_DUAL_HUD_G,  PROC_ID_EXT_DUAL_HUD)
 DECL_TOGGLE_ITEM(g_p1_pb,   STR_SYN_PB_FOCUS_T,  STR_SYN_PB_FOCUS_G,  PROC_ID_EXT_PB_FOCUS)
+DECL_TOGGLE_ITEM(g_p1_tch,  STR_SYN_TOUCH_T,     STR_SYN_TOUCH_G,     PROC_ID_EXT_MENU_TOUCH)
 DECL_TOGGLE_ITEM(g_p1_sfx,  STR_SYN_SFX_EN_T,    STR_SYN_SFX_EN_G,    PROC_ID_EXT_SFX_ENABLE)
 DECL_TOGGLE_ITEM(g_p1_vol,  STR_SYN_SFX_VOL_T,   STR_SYN_SFX_VOL_G,   PROC_ID_EXT_SFX_VOL)
-DECL_EXEC_ITEM  (g_p1_prv,  STR_SYN_SFX_PREV_T,  STR_SYN_SFX_PREV_G,  PROC_ID_EXT_SFX_PREVIEW)
 
 DECL_TOGGLE_ITEM(g_p2_sel,  STR_SYN_SFX_SEL_T,   STR_SYN_SFX_SEL_G,   PROC_ID_EXT_SFX_SELECT)
+DECL_EXEC_ITEM  (g_p2_prv,  STR_SYN_SFX_PREV_T,  STR_SYN_SFX_PREV_G,  PROC_ID_EXT_SFX_PREVIEW)
 DECL_EXEC_ITEM  (g_p2_scan, STR_SYN_SFX_SCAN_T,  STR_SYN_SFX_SCAN_G,  PROC_ID_EXT_SFX_RESCAN)
 DECL_EXEC_ITEM  (g_p2_rst,  STR_SYN_RESET_T,     STR_SYN_RESET_G,     PROC_ID_EXT_RESET_ALL)
 
@@ -242,6 +250,8 @@ DECL_OPT_REC(g_opt_on_dh,   SONY_STR_ON,  STR_SYN_DUAL_HUD_G,  SONY_ICON_ON,  SO
 DECL_OPT_REC(g_opt_off_dh,  SONY_STR_OFF, STR_SYN_DUAL_HUD_G,  SONY_ICON_OFF, SONY_STAT_OFF, 1u)
 DECL_OPT_REC(g_opt_on_pb,   SONY_STR_ON,  STR_SYN_PB_FOCUS_G,  SONY_ICON_ON,  SONY_STAT_ON,  0u)
 DECL_OPT_REC(g_opt_off_pb,  SONY_STR_OFF, STR_SYN_PB_FOCUS_G,  SONY_ICON_OFF, SONY_STAT_OFF, 1u)
+DECL_OPT_REC(g_opt_on_tch,  SONY_STR_ON,  STR_SYN_TOUCH_G,     SONY_ICON_ON,  SONY_STAT_ON,  0u)
+DECL_OPT_REC(g_opt_off_tch, SONY_STR_OFF, STR_SYN_TOUCH_G,     SONY_ICON_OFF, SONY_STAT_OFF, 1u)
 DECL_OPT_REC(g_opt_on_sfx,  SONY_STR_ON,  STR_SYN_SFX_EN_G,    SONY_ICON_ON,  SONY_STAT_ON,  0u)
 DECL_OPT_REC(g_opt_off_sfx, SONY_STR_OFF, STR_SYN_SFX_EN_G,    SONY_ICON_OFF, SONY_STAT_OFF, 1u)
 
@@ -256,11 +266,12 @@ static struct cmn_setting_props g_sfx_opt_props[A7R3_SFX_MAX_TOTAL];
 static struct cmn_setting_node g_sfx_opt_nodes[A7R3_SFX_MAX_TOTAL];
 static void *g_sfx_opt_ptrs[A7R3_SFX_MAX_TOTAL];
 
-static struct cmn_setting_node g_opt_nodes_onoff[8];
-static void *g_ev_opt_ptrs[2]  = { &g_opt_nodes_onoff[0], &g_opt_nodes_onoff[1] };
-static void *g_dh_opt_ptrs[2]  = { &g_opt_nodes_onoff[2], &g_opt_nodes_onoff[3] };
-static void *g_pb_opt_ptrs[2]  = { &g_opt_nodes_onoff[4], &g_opt_nodes_onoff[5] };
-static void *g_sfx_en_ptrs[2]  = { &g_opt_nodes_onoff[6], &g_opt_nodes_onoff[7] };
+static struct cmn_setting_node g_opt_nodes_onoff[10];
+static void *g_ev_opt_ptrs[2]    = { &g_opt_nodes_onoff[0], &g_opt_nodes_onoff[1] };
+static void *g_dh_opt_ptrs[2]    = { &g_opt_nodes_onoff[2], &g_opt_nodes_onoff[3] };
+static void *g_pb_opt_ptrs[2]    = { &g_opt_nodes_onoff[4], &g_opt_nodes_onoff[5] };
+static void *g_tch_opt_ptrs[2]   = { &g_opt_nodes_onoff[6], &g_opt_nodes_onoff[7] };
+static void *g_sfx_en_ptrs[2]  = { &g_opt_nodes_onoff[8], &g_opt_nodes_onoff[9] };
 
 static struct cmn_setting_node g_vol_nodes[3];
 static void *g_vol_ptrs[3] = { &g_vol_nodes[0], &g_vol_nodes[1], &g_vol_nodes[2] };
@@ -271,8 +282,10 @@ static void *g_p1_ptrs[6] = {
     &g_p1_nodes[3], &g_p1_nodes[4], &g_p1_nodes[5]
 };
 
-static struct cmn_setting_node g_p2_nodes[3];
-static void *g_p2_ptrs[3] = { &g_p2_nodes[0], &g_p2_nodes[1], &g_p2_nodes[2] };
+static struct cmn_setting_node g_p2_nodes[4];
+static void *g_p2_ptrs[4] = {
+    &g_p2_nodes[0], &g_p2_nodes[1], &g_p2_nodes[2], &g_p2_nodes[3]
+};
 
 static struct cmn_setting_node g_page_nodes[2];
 static void *g_tab7_page_ptrs[2] = { &g_page_nodes[0], &g_page_nodes[1] };
@@ -298,14 +311,15 @@ static void zero_node(struct cmn_setting_node *n, unsigned vptr,
 static void build_native_tree_nodes(unsigned node_vptr)
 {
     unsigned i;
-    static const struct cmn_setting_props *const onoff_props[8] = {
+    static const struct cmn_setting_props *const onoff_props[10] = {
         &g_opt_on_ev_props,  &g_opt_off_ev_props,
         &g_opt_on_dh_props,  &g_opt_off_dh_props,
         &g_opt_on_pb_props,  &g_opt_off_pb_props,
+        &g_opt_on_tch_props, &g_opt_off_tch_props,
         &g_opt_on_sfx_props, &g_opt_off_sfx_props,
     };
 
-    for (i = 0u; i < 8u; i++)
+    for (i = 0u; i < 10u; i++)
         zero_node(&g_opt_nodes_onoff[i], node_vptr, NULL, 0, onoff_props[i]);
 
     zero_node(&g_vol_nodes[0], node_vptr, NULL, 0, &g_opt_vol0_props);
@@ -328,19 +342,20 @@ static void build_native_tree_nodes(unsigned node_vptr)
         g_sfx_opt_ptrs[i] = &g_sfx_opt_nodes[i];
     }
 
-    zero_node(&g_p1_nodes[0], node_vptr, g_ev_opt_ptrs, 2, &g_p1_ev_props);
-    zero_node(&g_p1_nodes[1], node_vptr, g_dh_opt_ptrs, 2, &g_p1_dual_props);
-    zero_node(&g_p1_nodes[2], node_vptr, g_pb_opt_ptrs, 2, &g_p1_pb_props);
-    zero_node(&g_p1_nodes[3], node_vptr, g_sfx_en_ptrs, 2, &g_p1_sfx_props);
-    zero_node(&g_p1_nodes[4], node_vptr, g_vol_ptrs,    3, &g_p1_vol_props);
-    zero_node(&g_p1_nodes[5], node_vptr, NULL,          0, &g_p1_prv_props);
+    zero_node(&g_p1_nodes[0], node_vptr, g_ev_opt_ptrs,  2, &g_p1_ev_props);
+    zero_node(&g_p1_nodes[1], node_vptr, g_dh_opt_ptrs,  2, &g_p1_dual_props);
+    zero_node(&g_p1_nodes[2], node_vptr, g_pb_opt_ptrs,  2, &g_p1_pb_props);
+    zero_node(&g_p1_nodes[3], node_vptr, g_tch_opt_ptrs, 2, &g_p1_tch_props);
+    zero_node(&g_p1_nodes[4], node_vptr, g_sfx_en_ptrs,  2, &g_p1_sfx_props);
+    zero_node(&g_p1_nodes[5], node_vptr, g_vol_ptrs,     3, &g_p1_vol_props);
 
     zero_node(&g_p2_nodes[0], node_vptr, g_sfx_opt_ptrs, A7R3_SFX_MAX_TOTAL, &g_p2_sel_props);
-    zero_node(&g_p2_nodes[1], node_vptr, NULL,           0,                  &g_p2_scan_props);
-    zero_node(&g_p2_nodes[2], node_vptr, NULL,           0,                  &g_p2_rst_props);
+    zero_node(&g_p2_nodes[1], node_vptr, NULL,           0,                  &g_p2_prv_props);
+    zero_node(&g_p2_nodes[2], node_vptr, NULL,           0,                  &g_p2_scan_props);
+    zero_node(&g_p2_nodes[3], node_vptr, NULL,           0,                  &g_p2_rst_props);
 
     zero_node(&g_page_nodes[0], node_vptr, g_p1_ptrs, 6, &g_page1_props);
-    zero_node(&g_page_nodes[1], node_vptr, g_p2_ptrs, 3, &g_page2_props);
+    zero_node(&g_page_nodes[1], node_vptr, g_p2_ptrs, 4, &g_page2_props);
 
     zero_node(&g_tab7_node, node_vptr, g_tab7_page_ptrs, 2, &g_tab7_props);
 }
@@ -365,6 +380,8 @@ static const char *lookup_synthetic_utf8(unsigned res_id)
     case STR_SYN_DUAL_HUD_G:  return "在电子水平仪模式下同步显示实时直方图";
     case STR_SYN_PB_FOCUS_T:  return "相册显示焦点位置";
     case STR_SYN_PB_FOCUS_G:  return "回放照片时在画面上叠加标注对焦点位置";
+    case STR_SYN_TOUCH_T:     return "菜单触摸控制";
+    case STR_SYN_TOUCH_G:     return "开启后支持触摸原生菜单大类、翻页、列表、弹窗与白平衡";
     case STR_SYN_SFX_EN_T:    return "电子快门自定义音效";
     case STR_SYN_SFX_EN_G:    return "仅在电子快门(静音拍摄)模式下触发自定义快门音";
     case STR_SYN_SFX_VOL_T:   return "快门音效音量";
@@ -408,6 +425,12 @@ static int tab7_mlt_update_hook(void *self)
     int rc = g_real_mlt_update(self);
     if (self && g_mlt_place_wgt) {
         int tab_cnt = *(const int *)((const uint8_t *)self + VU2_MLT_TAB_COUNT_OFF);
+        if (g_mlt_get_row_cnt) {
+            int cur_cat = *(const int *)((const uint8_t *)self + 0x1d4u);
+            int cur_page = *(const int *)((const uint8_t *)self + 0x1d8u);
+            int row_cnt = g_mlt_get_row_cnt(self, cur_cat, cur_page);
+            a7r3_menu_touch_notify_mlt(self, cur_cat, cur_page, row_cnt);
+        }
         if (tab_cnt >= 7) {
             static const int16_t rect_tab6[4] = { 533, 0, 91, 66 };
             int16_t rect_bar6[4] = { 533, 0, 91, 66 };
@@ -472,6 +495,9 @@ static int mgr_get_value_hook(void *mgr, int proc_id, int *out_val)
         case PROC_ID_EXT_PB_FOCUS:
             *out_val = a7r3_pb_focus_get_enabled() ? 0 : 1;
             return 1;
+        case PROC_ID_EXT_MENU_TOUCH:
+            *out_val = a7r3_menu_touch_get_enabled() ? 0 : 1;
+            return 1;
         case PROC_ID_EXT_SFX_ENABLE:
             *out_val = a7r3_shutter_sfx_get_enabled() ? 0 : 1;
             return 1;
@@ -504,6 +530,9 @@ static int mgr_set_value_hook(void *mgr, int proc_id, int val)
             return 1;
         case PROC_ID_EXT_PB_FOCUS:
             a7r3_pb_focus_set_enabled(val == 0 ? 1 : 0);
+            return 1;
+        case PROC_ID_EXT_MENU_TOUCH:
+            a7r3_menu_touch_set_enabled(val == 0 ? 1 : 0);
             return 1;
         case PROC_ID_EXT_SFX_ENABLE:
             a7r3_shutter_sfx_set_enabled(val == 0 ? 1 : 0);
@@ -574,6 +603,7 @@ static int mgr_exec_hook(void *mgr, int proc_id)
             a7r3_input_set_ev_dial_shield(0);
             a7r3_dual_hud_set_enabled(0);
             a7r3_pb_focus_set_enabled(0);
+            a7r3_menu_touch_set_enabled(0);
             a7r3_shutter_sfx_reset();
             return 1;
         default:
@@ -702,6 +732,7 @@ int a7r3_native_tab7_install(void)
     g_orig_mlt_update = *mlt_slot;
     g_real_mlt_update = (mlt_update_fn)(vu2_base + VU2_MLT_UPDATE_REAL);
     g_mlt_place_wgt = (mlt_place_wgt_fn)(vu2_base + VU2_MLT_PLACE_WGT_REAL);
+    g_mlt_get_row_cnt = (mlt_get_row_cnt_fn)(vu2_base + VU2_MLT_GET_ROW_CNT_REAL);
     a7r3_dsb();
     *mlt_slot = (unsigned long)(uintptr_t)&tab7_mlt_update_hook;
     a7r3_dsb();

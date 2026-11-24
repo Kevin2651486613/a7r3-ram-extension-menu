@@ -8,6 +8,7 @@
 #define A7R3_KEY_RIGHT 0x1afu
 #define A7R3_KEY_ENTER 0x1acu
 #define A7R3_KEY_MENU  0x1abu
+#define A7R3_KEY_FN    0x7095u
 
 /* Non-dismissing display / EVF / LCD-tilt events on QID_INPUT_MAIN */
 #define A7R3_KEY_EYE_CONTACT  0x708bu /* KEY_OTHER_EYE_CONTACT (EVF eye sensor) */
@@ -57,5 +58,10 @@ void a7r3_input_set_ev_dial_shield(int enable);
 int  a7r3_input_get_ev_dial_shield(void);
 int  a7r3_input_take_ev_raw(unsigned *out_code, unsigned *out_w1, unsigned *out_w2);
 unsigned a7r3_input_native_activity_seq(void);
+
+/* Inject native key press/release via OSAL input queue and snoop touch taps. */
+int  a7r3_input_send_key_click(unsigned key_code, unsigned hold_ms);
+void a7r3_input_set_touch_tap_watch(int enable);
+int  a7r3_input_poll_touch_tap(int *out_x, int *out_y);
 
 #endif /* A7R3_INPUT_H */

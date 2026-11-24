@@ -10,13 +10,14 @@
 flowchart TD
     PC["宿主机 (Windows/Python)\nbuild_addon.py + deploy_ram.py\n+ a7r3_addon_console.py"] -->|"USB Service Mode\n/tmp_bt 文件读写 + shell"| SH["相机 BusyBox Shell\n(/tmp_bt 为 tmpfs)"]
     SH -->|"ptrace + 远程 mmap2/cacheflush/dlopen"| IM["主机进程 im.elf (PID=158)"]
-    IM -->|"__attribute__((constructor))\n创建守护线程 addon_worker"| UI["MD3 拓展菜单引擎\n(demo_cert_entry.c + a7r3_md3.c)"]
-    UI --> FB["显存管线 (a7r3_fb.c)\n/dev/mem O_SYNC + ioctl GOT 守卫"]
-    UI --> CERT["菜单入口劫持 (a7r3_entry_cert.c)\nCertLogo vptr + TextSprite GOT"]
+    IM -->|"__attribute__((constructor))\n创建守护线程 native_tab7_worker"| UI["原生第 7 大类 / MD3 引擎\n(demo_native_tab7.c / demo_cert_entry.c)"]
+    UI --> TAB7["原生第 7 大类扩展\n(a7r3_native_tab7.c)\nCmnViewSettingNode + PAS_MenuListTab"]
+    UI --> MTOUCH["纯 RAM 菜单触摸控制\n(a7r3_menu_touch.c)\nRW vtable 跟踪 + OSAL 队列注入"]
     UI --> INP["输入接管 & EV 波轮屏蔽\n(a7r3_input.c)\nosal_rcv_msg_tmo GOT + InfraInput"]
     UI --> HUD["水平仪+直方图同显\n(a7r3_dual_hud.c)\ngetResID + UserGetLayoutMode"]
     UI --> PB["相册对焦点显示\n(a7r3_pb_focus.c)\nFeaCore + PlayStillSingle + ViewSinglePb"]
     UI --> SFX["电子快门自定义音效\n(a7r3_shutter_sfx.c)\nObjStillRecorder + PrFILE2 + ADF 异步发声"]
+    UI -.->|"可选 v1.0-md3 路线"| FB["显存管线与 MD3 卡片\n(a7r3_fb.c + a7r3_entry_cert.c)"]
 ```
 
 ### 纯 RAM 运行与安全边界
@@ -151,8 +152,39 @@ DSP / 音频服务异步播放 (< 1ms 投递返回，连拍不堵队列)
 
 与自绘 MD3 叠层不同，Route A1 直接将拓展功能融入索尼原厂 `ViewSettingMenu` + `PAS_MenuListTab` 管线，全程由原厂 GPU 与系统字库渲染，彻底避免全屏显存拷贝和 `ioctl` 重绘冲突：
 
-1. **`CmnViewSettingNode` 树扩展 (`0x00a51c60`)**：在内存中构造精确的 40 字节 `cmn_setting_node` 节点树（1 个 Tab 根节点 `g_tab7_node` → 2 个 Page 节点 → 9 个 SettingItem 节点 + 选项子节点），保持 `parent = NULL` 交由原厂 `CmnViewSettingNode::init()` 自动建立父子索引；复制 `root->children[0..5]` 到 `g_root_children7[0..5]` 并追加 `&g_tab7_node`，原子修改 `root->children` 与 `root->count = 7`。
-2. **`PAS_MenuListTab` 预留第 7 槽后置排版 (`0x008bcb7c`)**：A7R3 的 `PAS_MenuListTab` 内部继承了早期 PMCA 7 大类内存布局（为 `0..6` 分配了 7 份图标与高亮条子控件），但 `.rodata` 坐标表第 `[6]` 项为全 0。钩住 `PAS_MenuListTab` 虚表更新函数（`+0x1ac`），在原函数返回后检测到 `m_tabCount (this+0x1c8) >= 7` 时，调用原厂 `place_wgt (0x0056d71b)` 将第 7 槽图标（`this+0x1840`）与聚焦条（`this+0x2720`）精确放置在 `{ 533, 0, 91, 66 }`（紧接前 6 个 `x = 17, 103, 189, 275, 361, 447` 的 `86px` 等距步进）。
-3. **`CmnViewProcessDataMgr` 纯内存状态托管 (`0x00a48b10`)**：复制原厂单例虚表并拦截 `getValue (+0x0c)`、`isGrayout (+0x24/+0x2c)`、`isDisable (+0x34/+0x38)`、`setValue (+0x44)`、`exec (+0x54)`。凡自定义 `proc_id ∈ [0x7f01..0x7f09]` 均在 RAM 中路由到对应 SDK 开关或动态 SD 音效索引（其中 `0x7f07` 通过 `isDisableByVal` 实时隐藏超出 `a7r3_shutter_sfx_count()` 的空槽位），不触碰机身 `Backup` 存储。
+1. **`CmnViewSettingNode` 树扩展 (`0x00a51c60`)**：在内存中构造精确的 40 字节 `cmn_setting_node` 节点树（1 个 Tab 根节点 `g_tab7_node` → 2 个 Page 节点 → 第 1 页 6 项 + 第 2 页 4 项共 10 个 SettingItem 节点与选项子节点），保持 `parent = NULL` 交由原厂 `CmnViewSettingNode::init()` 自动建立父子索引；复制 `root->children[0..5]` 到 `g_root_children7[0..5]` 并追加 `&g_tab7_node`，原子修改 `root->children` 与 `root->count = 7`。
+2. **`PAS_MenuListTab` 预留第 7 槽排版、顶栏底框与图标校准 (`0x008bcb7c`)**：
+   - A7R3 的 `PAS_MenuListTab` 为 `0..6` 分配了 7 份图标（`this+0x1840`）与前景叠层（`this+0x2720`）子控件，但 `.rodata` 坐标表第 `[6]` 项为全 0，且 7 大类时会将顶栏底框 `this+0x960` 切换到旧机型带 5 条错位竖线的 `0x0205cb44`。
+   - 钩住 `PAS_MenuListTab` 虚表更新函数（`+0x1ac`），在原函数返回后调用 `place_wgt (0x0056d71b)` 与 `GEN_Icon::setImage (vtable +0x104)` 将顶栏底框重设为 `0x020cc146`；同时调用 `PAS_MenuListTab::getCurPageRowCount (0x0056d5c3)` 同步当前页有效行数给触摸模块。
+   - **双层 105×66 资源适配 `91×66` 槽位**：底色 `0x0205d9b5/b7/b4` 与前景白图标 `0x0205cb79` 均来自旧系 `105×66` 资源表。通过对 `w_icon` 调用 `GEN_Icon::setScalingFlag(1)` + `setImageFilter(1)` 将背景无截断缩放入 `{ 533, 0, 91, 66 }`，再以 `ResourceManager::getImageSize (0x005c63e5)` 在运行时查出前景图真实像素宽高后按中心 `533 + (91 - w)/2` 放置 `w_bar`。
+3. **`CmnViewProcessDataMgr` 纯内存状态托管 (`0x00a48b10`)**：复制原厂单例虚表并拦截 `getValue (+0x0c)`、`isGrayout (+0x24/+0x2c)`、`isDisable (+0x34/+0x38)`、`setValue (+0x44)`、`exec (+0x54)`。凡自定义 `proc_id ∈ [0x7f01..0x7f0a]` 均在 RAM 中路由到对应 SDK 开关或动态 SD 音效索引（其中 `0x7f07` 通过 `isDisableByVal` 实时隐藏超出 `a7r3_shutter_sfx_count()` 的空槽位），不触碰机身 `Backup` 存储。
 4. **原厂字体 UTF-8 动态解析 (`TextSprite::SetString`)**：为新树节点分配合成资源 ID `0x7f010001..0x7f0100ff`，在 `TextSprite::SetString(res_id)` GOT 钩子中实时转向 `TextSprite::SetString(const char *utf8)`，直接使用原厂抗锯齿中文字体渲染标题、说明及 SD 卡 WAV 文件名。
+
+---
+
+## 10. 原生菜单纯内存触摸控制 (`a7r3_menu_touch.c`)
+
+在第 7 大类第 1 页第 4 项提供「菜单触摸控制」实时开关，开启后可在不修改任何 `.text` 指令、不扫描堆内存的前提下，直接触摸操作索尼原生菜单：
+
+1. **非吞噬式触控释放监听 + OSAL 队列注入 (`a7r3_input.c`)**：
+   - 在 `osal_rcv_msg_tmo` 的 `QID_TP_MAIN` 分支开启只读旁路监听（`g_tp_tap_watch`），依据 `w[2]` 按下/抬起状态（不硬编码过滤 `w[0]`）提取最新坐标并经 `InfraTp` 校准为 `0..639 × 0..479` 填入 `g_tap_ring`，**绝不吞噬触控消息**，保证实时取景触摸对焦与相册触控完全原生工作。
+   - 通过 `osal_valloc` + `osal_snd_msg` 向 `QID_INPUT_MAIN` 注入按下/释放键码（`UP=0x003`、`DOWN=0x030`、`LEFT=0x015`、`RIGHT=0x1af`、`ENTER=0x1ac`、`MENU=0x1ab`、`FN=0x7095`）。
+2. **RW 虚表对象生命周期追踪（零堆扫描）**：
+   - 挂钩 `viewUnified2.so` 中的 `ViewSettingMenu`（`~D1Ev/+0x20`、`~D0Ev/+0x24`、`onEvent/+0xec`）、`PAS_MenuListCategorizedItem`（`+0x1ac`）、`PAS_MenuListGroupedItem`（`+0x1ac`）以及 `viewUnified7.so` 中的 `ViewWhiteBalance`（`~D1Ev/+0x20`、`~D0Ev/+0x24`、`onEvent/+0xec`，支持懒加载补挂），销毁时自动清空悬空指针。
+   - 在索尼 UI 线程内部缓存当前页有效行数（`PAS_MenuListTab::getCurPageRowCount`）与弹窗真实选项总数（`0x0053be95`），避免跨线程调 C++ 虚接口。
+3. **零 `.text` 补丁一步直达导航**：
+   - 挂钩 `PAS_MenuListTab` 虚表 `+0x1b0`（行步进目标计算）/ `+0x1b4`（大类切换目标计算），以及自定义按键页 `+0x1b0`，在收到单次 `UP` 或 `Fn` 按键时按原厂返回值结构覆写目标分类/目标行，实现 7 大类与 6 行菜单一步高亮直达。
+4. **基于 `640×480` 实机截图校准的命中区与防穿透机制**：
+
+| 画面层级 / 状态 | `640×480` 校准坐标 | 触发动作 |
+| --- | --- | --- |
+| 不可设定提示 (`caution & 0x4000`) | 全屏 `0..639 × 0..479` | 发送 `ENTER` 关闭提示保留菜单 |
+| 二级弹窗 (`state=1, level=2, open=1`) | 外框 `[49, 21, 592, 456]`；选项 `x=97..544, y=91..396` (`51px/行`) | 框外发 `MENU` 取消；有效行结合 `top` 偏移步进至 `target` 后发 `ENTER`；留白忽略 |
+| 顶栏 7 大类 (`state=1, level=1`) | `y=0..64`；`[17,104]..[535,624]` 共 7 槽 | 置 `g_req_mlt_cat` + 发一次 `FN` 一步切换 |
+| 标题栏翻页 (`state=1, level=1` 或 `state=5`) | `y=65..124`；左 `x=12..220`，右 `x=420..635` | 发送 `LEFT` / `RIGHT` |
+| 主菜单 / 按键列表 6 行 | `x=17..622, y=125..429`（均分 6 行） | 受实际行数限制；一步直达高亮 + 发 `ENTER` |
+| 功能分配页 (`state=6`) | `y=125..429`；左列 `<87`，中区 `87..553`，右列 `>=554` | 左右整列 `LEFT`/`RIGHT` 翻页；中间一步选行 + `ENTER` |
+| 白平衡专用页 (`ViewWhiteBalance`) | 左侧滚轮 `x=0..113, y=51..385`（5 槽 × `67px`） | 中央槽发 `ENTER`；上下 1～2 槽发 `UP`/`DOWN` 步进 |
+
+> 同时内置 350 ms 同点抖动过滤，并在每次动作执行完成后立即清空 `g_tap_ring`，防止单次点击穿透进入新打开的子页面或弹窗。
 

@@ -46,10 +46,12 @@ HOOK_CHECKS = (
     ("SDK_DUAL_HOOKS=0x1", "水平仪与直方图同显模块"),
     ("SDK_PB_HOOKS=0x1", "相册显示焦点位置钩子"),
     ("SDK_SFX_INSTALL_OK", "自定义电子快门音效钩子"),
+    ("SDK_MTOUCH_HOOKS=0x1", "原生菜单触摸控制钩子"),
 )
 
 RESTORE_MARKERS = (
     "SDK_TAB7_RESTORED=",
+    "SDK_MTOUCH_RESTORED=",
     "SDK_CERT_RESTORED=",
     "SDK_SFX_RESTORED=",
     "SDK_PB_RESTORED=",

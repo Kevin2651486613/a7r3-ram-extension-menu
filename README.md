@@ -9,7 +9,7 @@
 > [!NOTE]
 > **分支版本说明**：
 > - `main`（Tag: `v1.0-md3`）：Material Design 3 自绘卡片菜单版（通过劫持设置第 7 页「认证标识」弹出）。
-> - **`feat/native-tab7-a1`（当前分支）**：**原生索尼 UI 第 7 大类版（Route A1）**——无需任何全屏显存自绘与防闪烁守卫，直接在原厂 `MENU` 顶栏新增第 7 个大类 Tab，使用原厂 GPU 渲染与索尼中文字库、原生二级选择弹窗与拨轮/按键交互。
+> - **`feat/native-tab7-a1`（当前分支，Tag: `v2.0-native-tab7`）**：**原生索尼 UI 第 7 大类 + 纯内存菜单触摸版（Route A1）**——无需任何全屏显存自绘与防闪烁守卫，直接在原厂 `MENU` 顶栏新增第 7 个大类 Tab，使用原厂 GPU 渲染与索尼中文字库、原生二级选择弹窗与拨轮/按键交互，并内置第 1 页第 4 项可开关的 **「菜单触摸控制」**。
 
 > [!WARNING]
 > **测试开发与合规声明（必读）**：
@@ -28,7 +28,7 @@
 2. **零 `.text` 代码段补丁**：绝不修改只读代码页，全部钩子均通过原子替换 `.got` 槽位或复制 C++ 虚表并切换 `vptr` 实现。
 3. **部署前严格边界检查**：
    - [deploy_ram.py](tools/deploy_ram.py) 内置：ELF32 ARM `ET_DYN` 文件头与大小校验、路径正则约束（拒绝非 `/tmp_bt/<合法文件名>` 与 `..`）、`pidof im.elf` + `/proc/<pid>/comm` 唯一性检验、核心模块映射检验、31 槽位耗尽防覆写保护、远程 `mmap2` 地址范围校验。
-   - [a7r3_addon_console.py](tools/a7r3_addon_console.py) 内置：Python 版本检查、旧实例卸载确认超时中止（未确认 `SDK_CERT_QUIT` 绝不二次注入）、支持离线环境自检命令 `check`（菜单 `[7]`）。
+   - [a7r3_addon_console.py](tools/a7r3_addon_console.py) 内置：Python 版本检查、旧实例卸载确认超时中止（未确认 `SDK_TAB7_QUIT` / `SDK_CERT_QUIT` 绝不二次注入）、支持离线环境自检命令 `check`（菜单 `[7]`）。
 4. **禁止 `dlclose()`**：卸载时还原全部原生指针并等待线程自然退栈，避免正在阻塞于钩子中的系统线程崩溃。
 
 ---
@@ -37,9 +37,10 @@
 
 | 功能模块 | 源码 | 核心逆向/实现思路 |
 | --- | --- | --- |
-| **原生第 7 大类 UI（Route A1 主线）** | [a7r3_native_tab7.c](src/a7r3_native_tab7.c) / [demo_native_tab7.c](src/demo_native_tab7.c) | 扩展 `viewUnified2` 活动设置树（`0x00a51c60`）为 7 个大类（2 页共 9 项原厂条目）；利用 `PAS_MenuListTab` 预留第 7 槽配合 `0x008bcb7c` 虚表后置定位 `{533, 0, 91, 66}`；切换 `CmnViewProcessDataMgr` `vptr` 在纯 RAM 中托管自定义 `proc_id (0x7f01..0x7f09)`；经 `TextSprite::SetString` 注入原厂字体 UTF-8 标签 |
+| **原生第 7 大类 UI（Route A1 主线）** | [a7r3_native_tab7.c](src/a7r3_native_tab7.c) / [demo_native_tab7.c](src/demo_native_tab7.c) | 扩展 `viewUnified2` 活动设置树（`0x00a51c60`）为 7 个大类（2 页 6+4 共 10 项原厂条目）；后置定位 `{533, 0, 91, 66}` 并修复顶栏底框 `0x020cc146`；`GEN_Icon::setScalingFlag` + `setImageFilter` 将 `105×66` 底色缩放入 `91×66` 槽位，并用运行时 `ResourceManager::getImageSize` 居中对齐前景图标 `0x0205cb79`；托管 `proc_id (0x7f01..0x7f0a)` 与 `TextSprite` UTF-8 解析 |
+| **原生菜单纯内存触摸控制** | [a7r3_menu_touch.c](src/a7r3_menu_touch.c) / [a7r3_input.c](src/a7r3_input.c) | **零 `.text` 代码补丁、零堆扫描**；在第 7 大类第 1 页第 4 项提供开关；通过可写虚表追踪 `ViewSettingMenu`、`PAS_MenuListTab`、自定义按键列表/功能页及白平衡专用页；支持 7 大类一步直达、标题栏翻页、6 行直达打开、二级弹窗（含滚动列表与框外取消）、不可设定提示全屏点击返回与白平衡左侧滚轮点选 |
 | 原生菜单无痕入口 + MD3 双页 UI（兼容保留） | [a7r3_entry_cert.c](src/a7r3_entry_cert.c) / [demo_cert_entry.c](src/demo_cert_entry.c) | 解除隐藏并切换「认证标识 (`0x10f`)」`vptr`，在纯 RAM 显存绘制 MD3 双页卡片（位于 `main` / `v1.0-md3`，仍可单独编译） |
-| 屏蔽曝光补偿波轮 | [a7r3_input.c](src/a7r3_input.c) | 钩住 `osal_rcv_msg_tmo`、`get_phy` / `get_ev` 并拦截 `0x70d2` / `0x70d3`，将物理 EV 拨盘输入固定为 0 |
+| 屏蔽曝光补偿波轮 | [a7r3_input.c](src/a7r3_input.c) | 钩住 `osal_rcv_msg_tmo`、`get_phy` / `get_ev` 并拦截 `0x70d2` / `0x70d3`，同时提供 OSAL 队列按键注入与非吞噬式触控释放监听 |
 | 水平仪与直方图同显（可选本地载荷） | [a7r3_dual_hud.c](src/a7r3_dual_hud.c) | 钩住 `getResID` / `RecDtor` / `UserGetLayoutMode` / 路由槽；**默认无载荷透传编译**，用户可自行提供本地提取修改的 `src/a7r3_dual_hud_payload.local.h` 启用 |
 | 相册回放显示对焦点 | [a7r3_pb_focus.c](src/a7r3_pb_focus.c) | `FeaCore` + `PlayStillSingle` 捕获 EXIF，机内解析 Sony MakerNote (`0x2027`) 对焦坐标并叠绘像素级无损红框，兼容连拍组/DISP/缩放/MENU 退让 |
 | 电子快门自定义快门音效 | [a7r3_shutter_sfx.c](src/a7r3_shutter_sfx.c) | 钩住 `ObjStillRecorder::ParseRecCntInfoPinCommand`；使用线程安全 `Backup_read(0x01070b2c)` 判定静音状态；绕开 8.3 限制调用 `PrFILE_fsfirst`/`pf2_fopen` 扫描 `/SHUTTER_SFX/*.wav`；机内 WAV→Sony 32B BFP 编码 + `futex` + `DataflowInfraCh::sndAsyncDataflowMsg` 异步发声 |
@@ -109,7 +110,7 @@ python tools/build_addon.py --src src/demo_cert_entry.c --out build/demo_cert_en
 
 # 方式 B：命令行快捷指令
 python tools/a7r3_addon_console.py update   # 编译 + 检查 + 安全部署
-python tools/a7r3_addon_console.py status   # 查看 7 项钩子状态与日志
+python tools/a7r3_addon_console.py status   # 查看 10 项钩子状态与日志
 python tools/a7r3_addon_console.py quit     # 安全卸载并还原全部原生钩子
 ```
 
