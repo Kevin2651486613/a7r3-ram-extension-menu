@@ -1,0 +1,35 @@
+# Build outputs & compiled binaries
+build/
+*.so
+*.o
+*.elf
+*.bin
+*.out
+
+# Local developer paths & generated/proprietary local headers (NEVER commit)
+.env.local
+src/md3_demo_labels.h
+src/*.local.h
+*.local.h
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Runtime logs & temporary dumps
+*.log
+*.raw
+*.dump
+
+# Local firmware extractions (never commit Sony firmware binaries)
+firmware/
+extraction/
+
+# IDE & OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

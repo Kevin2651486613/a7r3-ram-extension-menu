@@ -1,0 +1,113 @@
+# 工具链、编译约束与部署指南 (Tools, Build & Deployment)
+
+本文档汇总了本项目中使用的全部交叉编译、字模构建、纯 RAM 注入与音频预处理工具，以及在 Windows/Linux 宿主机上的环境配置与操作流程。
+
+---
+
+## 1. 所用工具清单
+
+| 类别 | 工具名称 | 用途说明 |
+| --- | --- | --- |
+| 交叉编译 & 链接 | **LLVM/Clang 18.1.8 + LLD** (`clang`, `ld.lld`, `llvm-readelf`, `llvm-objdump`, `llvm-nm`) | 编译 freestanding ARMv7-A `.so` 与无 libc 静态助手 ELF，并进行 ELF 符号/重定位段自动化检查 |
+| 脚本与控制台 | **Python 3.10+** | 运行编译脚本、字模生成器、纯 RAM 注入器及交互式控制台 |
+| 中文点阵生成 | **Pillow** (`PIL`) + 微软雅黑 (`msyhbd.ttc` / `msyh.ttc`) | `tools/gen_md3_assets.py` 生成 4-bit 抗锯齿中文标签表 `src/md3_demo_labels.h` |
+| 远程跳板汇编 | **Keystone Engine** (`keystone-engine`) | `tools/ram_loader/build_ram_tools.py` 动态汇编 ARM `dlopen` 跳板字节码 |
+| USB 通信层 | **Sony-PMCA-RE (`pmca` + `libusb`)** + 运行时辅助脚本 (`terminal_shell`, `build_mem_writer`, `build_show_hex`) | 通过 USB Service Mode 与相机建立交互式 BusyBox Shell 并安全传输文件至 `/tmp_bt` |
+| 音频转码 | **FFmpeg** (`ffmpeg`) | 将任意音乐/快门声转为机内兼容的 24 kHz 单声道 16-bit 未压缩 PCM `.wav` |
+| Windows 启动器 | [`启动拓展菜单工具.bat`](../启动拓展菜单工具.bat) | 自动检测 `python` / `py -3` 并以 UTF-8 启动控制台工具 |
+
+---
+
+## 2. 环境变量与 `.env.local` 配置
+
+本仓库**不包含任何本机绝对路径或原厂系统库文件**。`tools/` 下的脚本统一通过 `tools/env_config.py` 读取仓库根目录的 `.env.local`（已被 `.gitignore` 忽略），也可直接读取系统环境变量或命令行参数：
+
+```powershell
+copy .env.example .env.local
+```
+
+| 环境变量 | 示例值 | 说明 |
+| --- | --- | --- |
+| `A7R3_LLVM_BIN` | `/path/to/llvm/bin` | 包含 `clang`、`ld.lld`、`llvm-readelf` 的目录（未设置时自动查找 `PATH` 中的 `clang`） |
+| `A7R3_FW_LIB_DIR` | `/path/to/your/a7r3_v310_extraction/lib` | 用户自行从合法持有的设备/固件中本地提取的 `/lib`（需含 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so`） |
+| `A7R3_HUD_DIR` | `/path/to/your/pmca_runtime_helpers` | 外部 runtime 辅助仓库目录（提供 `pmca`、`terminal_shell`、`build_mem_writer`、`build_show_hex` 等） |
+| `A7R3_PMCA_DIR` | 可选 | 若单独安装了 `Sony-PMCA-RE`，可指定其根目录 |
+| `A7R3_FONT_BOLD` / `A7R3_FONT_REG` | `C:\Windows\Fonts\msyhbd.ttc` | 重新生成中文点阵字模时使用的字体文件（未设置时自动探测系统常见中文字体） |
+
+---
+
+## 3. Freestanding ARMv7-A 编译约束
+
+由于目标相机运行在古老的 **ARM Linux 3.0 + glibc 2.11.2** 环境下，编译选项与链接校验必须严格遵循 [tools/build_addon.py](../tools/build_addon.py) 的规则：
+
+1. **核心编译参数**：
+   - `--target=arm-linux-gnueabi -march=armv7-a -mfloat-abi=soft -shared -fPIC -O2`
+   - `-nostdlib -ffreestanding -fno-builtin -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fvisibility=hidden`
+   - `-Wall -Wextra -Werror -Wno-unused-parameter`（强制零警告编译）
+2. **关键链接参数（防 `ld.so` 崩溃）**：
+   - `-fuse-ld=ld.lld -Wl,-z,now -Wl,-Bsymbolic -Wl,-z,nocombreloc -Wl,--no-as-needed`
+   - **必须加 `-Wl,-z,nocombreloc`**：`ld.lld` 默认合并重定位并生成 `DT_RELCOUNT`，而 A7R3 固件的 glibc 2.11.2 动态链接器在处理带 `DT_RELCOUNT` 的 `BIND_NOW` 共享库时会直接崩溃。`build_addon.py` 在链接后会自动检查 `llvm-readelf -d` 是否误输出 `(RELCOUNT)`。
+3. **禁止引入隐式运行时/除法辅助符号**：
+   - 由于启用了 `-nostdlib` 且未链接 `libgcc`，所有 32/64 位整数除法不得在高频/可避开路径产生 `__aeabi_uidiv` / `__aeabi_idiv` / `__aeabi_uldivmod` 等未解析符号（例如 [a7r3_shutter_sfx.c](../src/a7r3_shutter_sfx.c) 与 [a7r3_pb_focus.c](../src/a7r3_pb_focus.c) 中专门实现了按位整型除法 `u64_div_u32` 和 `udiv32`）。
+   - `build_addon.py` 会交叉比对 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so` 的导出表；实机产物的 `UND` 符号应仅允许 `WEAK pthread_create`。
+
+### 常用构建命令
+
+```powershell
+# 编译完整版本（原生设置第 7 页「拓展菜单」入口版，推荐）
+python tools/build_addon.py --src src/demo_cert_entry.c --out build/demo_cert_entry_ram.so
+
+# 编译精简示例（右上角 EX 悬浮按钮入口版）
+python tools/build_addon.py --src src/demo_addon_menu.c --out build/demo_addon_ram.so
+
+# 如修改了中文菜单文本（SPECS），重新生成 md3_demo_labels.h
+python tools/gen_md3_assets.py
+```
+
+---
+
+## 4. 控制台管理工具与部署流程
+
+`tools/a7r3_addon_console.py` 封装了完整的编译、USB Service Mode 握手、纯 RAM 注入、状态检查与无痕卸载流程：
+
+```powershell
+# 交互式控制台（或直接双击 启动拓展菜单工具.bat）
+python tools/a7r3_addon_console.py
+
+# 命令行一键模式：
+python tools/a7r3_addon_console.py check    # 离线检查 Python/环境变量/工具链/.so 边界有效性（无需连接相机）
+python tools/a7r3_addon_console.py build    # 自动生成字模并交叉编译 demo_cert_entry_ram.so
+python tools/a7r3_addon_console.py deploy   # 安全停掉旧实例 + 边界检查 + 部署当前 .so + 检查 7 项钩子
+python tools/a7r3_addon_console.py update   # 先重新编译再热部署（开发迭代最常用）
+python tools/a7r3_addon_console.py status   # 查看 PID、7 项钩子状态与最近 25 行 /tmp_bt/addon.log
+python tools/a7r3_addon_console.py open     # 遥控立即弹出 MD3 菜单卡片
+python tools/a7r3_addon_console.py quit     # 安全还原所有 GOT/vptr 钩子并退出工作线程
+```
+
+部署成功时，日志与自检输出应全部显示 `[OK]`：
+- `SDK_CERT_ALIVE`（工作线程存活）
+- `SDK_CERT_AFTER_DIS=0x0`（认证标识入口已解除隐藏）
+- `SDK_CERT_LABEL_HOOK=0x1`（原生菜单文字替换为「拓展菜单」）
+- `SDK_EV_HOOKS=0x1`（曝光补偿波轮屏蔽钩子）
+- `SDK_DUAL_HOOKS=0x1`（水平仪与直方图同显钩子）
+- `SDK_PB_HOOKS=0x1`（相册显示焦点位置钩子）
+- `SDK_SFX_INSTALL_OK`（自定义电子快门音效钩子）
+
+---
+
+## 5. SD 卡自定义快门音效（`.wav`）准备规范
+
+1. 在存储卡（卡 1 或卡 2 根目录）创建目录 **`/SHUTTER_SFX/`**（例如 `X:\SHUTTER_SFX\`）。
+2. 将音效文件放入该目录（扩展名 `.wav` 即可，支持长文件名，最多自动扫描前 16 个文件）。
+3. **格式要求**：
+   - 容器格式：标准 RIFF `WAVE`（**必须为未压缩 PCM `audio_fmt = 1` 或 `WAVE_FORMAT_EXTENSIBLE` 封装 PCM**，不支持 MP3-in-WAV `0x55`、ADPCM 等压缩编码）；
+   - 采样率：`4000 Hz ~ 96000 Hz`（推荐直接设为 **`24000 Hz`**，与机内 ADF 硬件一致，可避免重采样损益）；
+   - 位深与声道：`8 / 16 / 24-bit` PCM，单声道或立体声；
+   - 建议时长：`<= 0.65 s`（受限于 `ADF_ENC_CAP = 32768 B`，超过部分会被截断）。
+4. **推荐使用 `ffmpeg` 批量转码**：
+
+```powershell
+ffmpeg -i source_sound.mp3 -c:a pcm_s16le -ar 24000 -ac 1 shutter_01.wav
+```
+
+5. 在相机上打开「拓展菜单」→ 第 4 行「自定义快门音效」→ 点击「刷新SD」即可动态加载并试听。
