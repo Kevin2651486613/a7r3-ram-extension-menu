@@ -83,32 +83,45 @@ a7r3-ram-extension-menu/
 
 ---
 
-## 快速开始
+## 快速开始（完整闭环指南）
 
-### 1. 安装依赖与配置环境（支持 Windows / macOS / Linux）
+### 1. 仓库外必须自备的 3 项前提（因体积 / 协议 / 系统权限未打包）
+
+1. **Python 依赖与上游 `Sony-PMCA-RE`（MIT 独立仓库）**：
+   ```bash
+   pip install -r requirements.txt
+   git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
+   ```
+2. **LLVM 交叉编译工具链（体量过大未打包，需含 `clang` + `ld.lld` + `llvm-readelf`）**：
+   - **Windows**：安装官方 [LLVM Releases](https://github.com/llvm/llvm-project/releases) 预编译包（并在 `.env.local` 配置 `A7R3_LLVM_BIN`，或将其 `bin` 加入 `PATH`）。
+   - **macOS**：`brew install llvm libusb`（注意不能只靠 Xcode CLT 自带的 `/usr/bin/clang`，因为它缺少 `ld.lld`；脚本会自动探测 `/opt/homebrew/opt/llvm/bin` 与 `/usr/local/opt/llvm/bin`）。
+   - **Linux (Ubuntu/Debian)**：`sudo apt install clang lld llvm libusb-1.0-0`。
+3. **操作系统 USB 驱动与权限（OS 限制无法由 Git 携带，最易卡点）**：
+   - **Windows（必看）**：`Sony-PMCA-RE` 自带的 Windows 原生 Service Mode 驱动为未实现占位，必须使用 **Zadig** 为相连的 Sony 相机 USB 接口（Mass Storage 与切换后的 Service Mode/Vendor 接口）绑定 **`libusb-win32`**（推荐）或 `libusbK` 驱动。
+   - **Linux**：普通用户需配置 Sony (`054c`) USB `udev` 权限规则，或临时用 `sudo` 运行部署命令。
+   - **macOS**：需安装 `brew install libusb`；注意系统可能会自动挂载相机 MSC 存储卷造成占用，若连接失败请先弹出卷或检查 USB 权限；Apple Silicon 安装 `keystone-engine` 若无对应版本 wheel 需具备 `cmake`/编译环境。（注：作者目前在 Windows + QEMU 完成主要测试，macOS 端仅完成工具链适配代码，尚未在真机 Mac 上实测 USB 注入。）
+
+### 2. 初始化本机编译库与双显载荷（零固件违规，无需满网找固件解包）
+
+因为零固件合规原则，仓库不包含 Sony A7R3 系统 `.so` 与修改后的 `.uxc` 布局字节。现在**只需将你的 Sony A7R3 设为 USB 大容量存储模式 (MSC) 并连接电脑，运行一条只读初始化命令**：
 
 ```bash
-pip install -r requirements.txt
-git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
-# macOS 还需安装 LLVM 与 libusb: brew install llvm libusb
+python tools/a7r3_addon_console.py init-camera
 ```
 
-复制 `.env.example` 为 `.env.local`（已被 `.gitignore` 忽略）并填写路径：
+该命令会在 1 秒内只读完成两件事（产出全部放在 `.gitignore` 忽略目录，绝不会提交或写入相机闪存）：
+1. 从相机 `/lib/` 只读拉取并校验 MD5 保存 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so` 到 `./firmware/lib/`（编译脚本自动识别，无需手动填写路径）。
+2. 从相机 `/usr/share/app/viewStlrec.uxc` 提取生成本地 `src/a7r3_dual_hud_payload.local.h`，用于开启「水平仪与直方图同显」。
 
-```bash
-# Windows: copy .env.example .env.local
-cp .env.example .env.local
-# 填写 A7R3_LLVM_BIN、合法提取的 A7R3 v3.10 /lib（含 libc/libdl/libpthread 2.11.2），
-# 以及 A7R3_PMCA_DIR（若放在 ./Sony-PMCA-RE 或 ../Sony-PMCA-RE 可自动识别）
-```
+*(如果你电脑里已经解压好完整 A7R3 v3.10 固件，也可以不连相机，直接 `cp .env.example .env.local` 并填写 `A7R3_FW_LIB_DIR`；编译时会自动在同级探测 `viewStlrec.uxc` 生成双显载荷。)*
 
-运行离线边界与依赖自检：
+运行环境自检（应看到 `LLVM`、`A7R3 系统库`、`usb`、`pmca` 全部 `[OK]`）：
 
 ```powershell
 python tools/a7r3_addon_console.py check
 ```
 
-### 2. 编译插件 `.so`
+### 3. 编译插件 `.so`
 
 ```powershell
 # 编译原生第 7 大类（Route A1，无需生成字体位图，推荐）
@@ -118,7 +131,7 @@ python tools/build_addon.py --src src/demo_native_tab7.c --out build/demo_native
 python tools/build_addon.py --src src/demo_cert_entry.c --out build/demo_cert_entry_ram.so
 ```
 
-### 3. 启动控制台并纯 RAM 注入（开发测试用）
+### 4. 启动控制台并纯 RAM 注入（开发测试用）
 
 ```powershell
 # 方式 A：双击 Windows 入口
@@ -130,14 +143,17 @@ python tools/a7r3_addon_console.py status   # 查看 10 项钩子状态与日志
 python tools/a7r3_addon_console.py quit     # 安全卸载并还原全部原生钩子
 ```
 
-> [!TIP]
-> **启用“水平仪与直方图同显”**：仓库遵循零固件合规原则，默认不分发修改后的原厂 `.uxc` 布局字节（未配置时该菜单项自动显示为灰色）。若你的 `A7R3_FW_LIB_DIR` 同级包含完整 `usr/share/app/viewStlrec.uxc`，编译时会自动生成 `src/a7r3_dual_hud_payload.local.h`；若本地仅有 `lib/`，可在连接相机后运行一次：
-> ```bash
-> python tools/a7r3_addon_console.py gen-payload --from-camera
-> python tools/a7r3_addon_console.py update
-> ```
+### 5. 常见报错与排查定位
 
-### 4. SD 卡自定义音效准备（可选）
+| 现象 / 提示 | 根因 | 解决方法 |
+| --- | --- | --- |
+| `未找到完整 LLVM` / macOS 缺 `ld.lld` | 未装完整 LLVM 或误用了 Xcode `/usr/bin/clang` 桩 | Windows 填 `.env.local` 的 `A7R3_LLVM_BIN`；macOS 执行 `brew install llvm` |
+| `未找到 A7R3 v3.10 系统库` | 未配置 `A7R3_FW_LIB_DIR` 且 `./firmware/lib/` 为空 | 连上相机跑一次 `python tools/a7r3_addon_console.py init-camera` |
+| `未检测到 libusb 原生驱动` / `No backend` / `Access denied` | Windows 未装 Zadig 驱动，或 macOS/Linux 缺 libusb/USB 权限 | Windows 用 Zadig 绑 `libusb-win32`/`libusbK`；macOS `brew install libusb`；Linux 配 `udev` 或 `sudo` |
+| `Sony-PMCA-RE` (`pmca`) 缺失 | 未克隆上游 `pmca` 库 | `git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE` |
+| 菜单里「水平仪与直方图同显」**灰色不可选** | 编译时未生成 `src/a7r3_dual_hud_payload.local.h`（安全透传模式） | 运行 `python tools/a7r3_addon_console.py gen-payload --from-camera` 后再 `update` |
+
+### 6. SD 卡自定义音效准备（可选）
 
 在存储卡 `/SHUTTER_SFX/` 目录放入未压缩 PCM `.wav`（推荐 24 kHz 单声道 16-bit PCM，时长 `<= 0.65 s`）：
 

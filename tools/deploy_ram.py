@@ -244,6 +244,28 @@ def upload_tmpbt(backend, sh, remote_path: str, data: bytes, executable: bool = 
             raise RuntimeError(f"chmod 700 failed: {rc!r}")
 
 
+def read_camera_file_verified(backend, sh, remote_path: str) -> bytes:
+    """Read a firmware/system file read-only via Senser USB and verify MD5."""
+    md5_out = sh(f"/bin/busybox md5sum {remote_path}")
+    m = re.search(rf"([0-9a-f]{{32}})\s+{re.escape(remote_path)}", md5_out)
+    if not m:
+        raise RuntimeError(f"无法获取相机文件 {remote_path} 的 MD5: {md5_out!r}")
+    want_md5 = m.group(1)
+
+    buf = io.BytesIO()
+    backend.readFile(remote_path, buf)
+    data = buf.getvalue()
+    if not data:
+        raise RuntimeError(f"从相机读取 {remote_path} 返回空数据")
+
+    got_md5 = hashlib.md5(data).hexdigest()
+    if got_md5 != want_md5:
+        raise RuntimeError(
+            f"读取 {remote_path} MD5 校验失败: 期望 {want_md5}, 实际 {got_md5}"
+        )
+    return data
+
+
 def parse_map_rx_base(maps_text: str, suffix: str) -> int | None:
     for line in maps_text.splitlines():
         parts = line.split()

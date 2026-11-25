@@ -53,8 +53,15 @@ def resolve_llvm_bin(cli_val: Path | None) -> Path | None:
 def resolve_fw_lib_dir(cli_val: Path | None) -> Path | None:
     if cli_val is not None:
         return cli_val
-    if env_val := os.environ.get("A7R3_FW_LIB_DIR"):
+    if env_val := os.environ.get("A7R3_FW_LIB_DIR", "").strip():
         return Path(env_val)
+    for local_cand in (SDK_DIR / "firmware" / "lib", SDK_DIR / "extraction" / "files" / "lib"):
+        if (
+            (local_cand / "libc-2.11.2.so").is_file()
+            and (local_cand / "libdl-2.11.2.so").is_file()
+            and (local_cand / "libpthread-2.11.2.so").is_file()
+        ):
+            return local_cand
     return None
 
 
@@ -160,7 +167,9 @@ def main() -> int:
         return 1
     if fw_lib_dir is None:
         print(
-            "[!] Firmware /lib directory not configured. Set A7R3_FW_LIB_DIR in .env.local or pass --fw-lib-dir.",
+            "[!] Firmware /lib directory not configured.\n"
+            "    Run `python tools/a7r3_addon_console.py init-camera` with camera connected,\n"
+            "    or set A7R3_FW_LIB_DIR in .env.local (or pass --fw-lib-dir).",
             file=sys.stderr,
         )
         return 1

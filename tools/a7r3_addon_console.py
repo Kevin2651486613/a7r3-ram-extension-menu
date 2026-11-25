@@ -26,10 +26,12 @@ from deploy_ram import (  # noqa: E402
     ensure_service_terminal,
     get_verified_im_pid,
     importDriver,
+    read_camera_file_verified,
     require_usb_runtime,
     shell_command,
     validate_arm32_shared_elf,
 )
+from build_addon import resolve_fw_lib_dir, resolve_llvm_bin, tool_exe  # noqa: E402
 
 DEFAULT_SO = SDK_DIR / "build" / "demo_native_tab7_ram.so"
 DEFAULT_SRC = SDK_DIR / "src" / "demo_native_tab7.c"
@@ -203,34 +205,29 @@ def action_check(so_path: Path) -> int:
     env_local = SDK_DIR / ".env.local"
     print(f"  [{'OK' if env_local.is_file() else 'INFO'}] 本地环境配置 .env.local: {'已加载' if env_local.is_file() else '未创建 (将使用系统环境变量)'}")
 
-    llvm_env = os.environ.get("A7R3_LLVM_BIN", "").strip()
-    llvm_dir: Path | None = Path(llvm_env) if llvm_env else None
-    if llvm_dir is None:
-        if lld_p := shutil.which("ld.lld"):
-            llvm_dir = Path(lld_p).resolve().parent
-        else:
-            for brew_dir in (Path("/opt/homebrew/opt/llvm/bin"), Path("/usr/local/opt/llvm/bin")):
-                if (brew_dir / "clang").is_file() and (brew_dir / "ld.lld").is_file():
-                    llvm_dir = brew_dir
-                    break
-            if llvm_dir is None and (clang_p := shutil.which("clang")):
-                llvm_dir = Path(clang_p).resolve().parent
-    clang_name = "clang.exe" if llvm_dir and (llvm_dir / "clang.exe").exists() else "clang"
-    lld_name = "ld.lld.exe" if llvm_dir and (llvm_dir / "ld.lld.exe").exists() else "ld.lld"
-    llvm_ok = bool(llvm_dir and (llvm_dir / clang_name).is_file() and (llvm_dir / lld_name).is_file())
+    llvm_dir = resolve_llvm_bin(None)
+    llvm_ok = bool(
+        llvm_dir
+        and tool_exe(llvm_dir, "clang").is_file()
+        and tool_exe(llvm_dir, "ld.lld").is_file()
+        and tool_exe(llvm_dir, "llvm-readelf").is_file()
+    )
     print(
-        f"  [{'OK' if llvm_ok else 'WARN'}] LLVM 工具链 (clang + ld.lld): "
-        f"{llvm_dir if llvm_ok else '未找到完整 LLVM (macOS 请 brew install llvm 或配置 A7R3_LLVM_BIN)'}"
+        f"  [{'OK' if llvm_ok else 'WARN'}] LLVM 工具链 (clang + ld.lld + llvm-readelf): "
+        f"{llvm_dir if llvm_ok else '未找到完整 LLVM (Windows 请装 LLVM；macOS 请 brew install llvm；Linux 请装 clang lld llvm)'}"
     )
 
-    fw_env = os.environ.get("A7R3_FW_LIB_DIR", "").strip()
+    fw_dir = resolve_fw_lib_dir(None)
     fw_ok = bool(
-        fw_env
-        and (Path(fw_env) / "libc-2.11.2.so").is_file()
-        and (Path(fw_env) / "libdl-2.11.2.so").is_file()
-        and (Path(fw_env) / "libpthread-2.11.2.so").is_file()
+        fw_dir
+        and (fw_dir / "libc-2.11.2.so").is_file()
+        and (fw_dir / "libdl-2.11.2.so").is_file()
+        and (fw_dir / "libpthread-2.11.2.so").is_file()
     )
-    print(f"  [{'OK' if fw_ok else 'WARN'}] A7R3 v3.10 系统库 (/lib): {fw_env if fw_ok else '未找到，请配置 A7R3_FW_LIB_DIR'}")
+    print(
+        f"  [{'OK' if fw_ok else 'WARN'}] A7R3 v3.10 系统库 (/lib): "
+        f"{fw_dir if fw_ok else '未找到，连接相机运行 `python tools/a7r3_addon_console.py init-camera` 可自动提取'}"
+    )
 
     for pkg, desc in (
         ("PIL", "Pillow 字模生成"),
@@ -239,7 +236,27 @@ def action_check(so_path: Path) -> int:
         ("pmca", "Sony-PMCA-RE (A7R3_PMCA_DIR)"),
     ):
         found = importlib.util.find_spec(pkg) is not None
-        print(f"  [{'OK' if found else 'WARN'}] Python 包 {pkg} ({desc}): {'已就绪' if found else '未检测到'}")
+        extra_note = ""
+        if found and pkg == "usb":
+            try:
+                import usb.backend.libusb0 as l0
+                import usb.backend.libusb1 as l1
+
+                has_native = (l1.get_backend() is not None) or (l0.get_backend() is not None)
+            except Exception:
+                has_native = False
+            if not has_native:
+                found = False
+                if sys.platform == "win32":
+                    extra_note = " — 未检测到 libusb 原生驱动，请用 Zadig 为相机绑定 libusb-win32 / libusbK"
+                elif sys.platform == "darwin":
+                    extra_note = " — 未检测到 libusb 原生库，请运行 `brew install libusb`"
+                else:
+                    extra_note = " — 未检测到 libusb 原生库，请安装 `libusb-1.0-0` 并配置 udev 权限"
+        if not found and pkg == "pmca":
+            extra_note = " — 请运行 `git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE`"
+        status_str = "已就绪" if found else ("未检测到" + extra_note if not extra_note else extra_note.lstrip(" — "))
+        print(f"  [{'OK' if found else 'WARN'}] Python 包 {pkg} ({desc}): {status_str}")
 
     try:
         from ram_loader.terminal_shell import shell_command as _sc  # noqa: F401
@@ -259,7 +276,7 @@ def action_check(so_path: Path) -> int:
         try:
             from gen_dual_hud_payload import find_local_uxc
 
-            found_uxc = find_local_uxc(Path(fw_env) if fw_env else None)
+            found_uxc = find_local_uxc(fw_dir)
         except Exception:
             found_uxc = None
         if found_uxc is not None:
@@ -394,6 +411,35 @@ def action_gen_payload(from_camera: bool = False, force: bool = False) -> int:
     return 0
 
 
+def action_init_camera(force: bool = False) -> int:
+    """Pull 3 /lib linking libraries + viewStlrec.uxc read-only from connected A7R3."""
+    from gen_dual_hud_payload import CAMERA_UXC_PATH, DEFAULT_OUT, generate_local_header
+
+    out_lib_dir = SDK_DIR / "firmware" / "lib"
+    out_lib_dir.mkdir(parents=True, exist_ok=True)
+    lib_files = (
+        "/lib/libc-2.11.2.so",
+        "/lib/libdl-2.11.2.so",
+        "/lib/libpthread-2.11.2.so",
+    )
+
+    print("[*] 正在连接相机只读初始化本地开发环境（零闪存写入，产出均位于 .gitignore 目录）...")
+    driver_ctx, backend, sh = open_service_session(force=force)
+    with driver_ctx:
+        for remote_p in lib_files:
+            data = read_camera_file_verified(backend, sh, remote_p)
+            dst = out_lib_dir / Path(remote_p).name
+            dst.write_bytes(data)
+            print(f"[+] 已保存 {dst} ({len(data)} bytes)")
+
+        uxc_bytes = read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
+        out_h = generate_local_header(uxc_bytes, out_path=DEFAULT_OUT)
+        print(f"[+] 已生成本地双显载荷: {out_h}")
+
+    print("[+] 本地开发环境初始化完成！现在可以直接运行 `check` / `build` / `update`。")
+    return 0
+
+
 def action_update(so_path: Path, force: bool = False) -> int:
     rc = action_build(so_path)
     if rc != 0:
@@ -424,6 +470,7 @@ def print_banner(so_path: Path) -> None:
     print("  [6] 一键编译并热更新部署到相机")
     print("  [7] 环境与边界安全自检 (离线检查，无需连接相机)")
     print("  [8] 生成本地双显载荷 (a7r3_dual_hud_payload.local.h)")
+    print("  [9] 从相机只读初始化编译依赖 (/lib 三件套 + 双显载荷)")
     print("  [0] 退出控制台")
     print("-" * 64)
 
@@ -432,7 +479,7 @@ def interactive_loop(so_path: Path, force: bool = False) -> int:
     while True:
         print_banner(so_path)
         try:
-            choice = input("请选择操作编号 [0-8]: ").strip()
+            choice = input("请选择操作编号 [0-9]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n已退出。")
             return 0
@@ -461,6 +508,8 @@ def interactive_loop(so_path: Path, force: bool = False) -> int:
                 action_check(so_path)
             elif choice == "8":
                 action_gen_payload(force=force)
+            elif choice == "9":
+                action_init_camera(force=force)
             else:
                 print(f"[!] 无效选项: {choice!r}")
         except KeyboardInterrupt:
@@ -484,7 +533,7 @@ def main() -> int:
     ap.add_argument(
         "action",
         nargs="?",
-        choices=("deploy", "status", "open", "quit", "build", "update", "check", "gen-payload"),
+        choices=("deploy", "status", "open", "quit", "build", "update", "check", "gen-payload", "init-camera"),
         help="可选直接执行的子命令；不填则进入交互式菜单",
     )
     ap.add_argument(
@@ -531,6 +580,8 @@ def main() -> int:
             return action_update(args.so, force=args.force)
         if args.action == "gen-payload":
             return action_gen_payload(from_camera=args.from_camera, force=args.force)
+        if args.action == "init-camera":
+            return action_init_camera(force=args.force)
     except KeyboardInterrupt:
         print("\n[!] 操作已被用户中断。")
         return 130

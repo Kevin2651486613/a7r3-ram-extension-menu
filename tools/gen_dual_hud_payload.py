@@ -10,9 +10,7 @@ as `0xd1153927` into level layout `0x02008029`, and writes gitignored
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
-import re
 import struct
 import sys
 from pathlib import Path
@@ -35,7 +33,6 @@ WID_HIST_SRC_MASTER = 0xD1073927
 WID_NEW_MASTER = 0xD1153927
 EXPECTED_PATCHED_LEN = 2380
 CAMERA_UXC_PATH = "/usr/share/app/viewStlrec.uxc"
-READ_CHUNK_BYTES = 4096
 
 
 def find_local_uxc(
@@ -216,67 +213,17 @@ def pull_uxc_from_camera(force: bool = False) -> bytes:
         SonySenserCamera,
         ensure_service_terminal,
         importDriver,
+        read_camera_file_verified,
         require_usb_runtime,
-        shell_command,
-        upload_tmpbt,
     )
-    from ram_loader.build_show_hex import build_show_hex_elf
+    from ram_loader.terminal_shell import shell_command
 
     require_usb_runtime()
     with importDriver("libusb") as driver:
         dev = ensure_service_terminal(driver, force=force)
         backend = SenserPlatformBackend(SonySenserCamera(dev))
         sh = lambda cmd, timeout=15: shell_command(dev, cmd, timeout=timeout)
-
-        meta = sh(
-            f"/bin/busybox ls -l {CAMERA_UXC_PATH} && /bin/busybox md5sum {CAMERA_UXC_PATH}"
-        )
-        size_m = re.search(rf"\s(\d+)\s+\w+\s+\d+\s+[\d:]+\s+{re.escape(CAMERA_UXC_PATH)}", meta)
-        md5_m = re.search(rf"([0-9a-f]{{32}})\s+{re.escape(CAMERA_UXC_PATH)}", meta)
-        if not size_m or not md5_m:
-            raise RuntimeError(f"无法读取相机 {CAMERA_UXC_PATH} 元信息: {meta!r}")
-        total_size = int(size_m.group(1))
-        want_md5 = md5_m.group(1)
-        if total_size < 1024 or total_size > 262144:
-            raise RuntimeError(f"非预期的 {CAMERA_UXC_PATH} 大小: {total_size}")
-
-        reader = "/tmp_bt/sdk_show_uxc"
-        upload_tmpbt(
-            backend,
-            sh,
-            reader,
-            build_show_hex_elf(source_path=CAMERA_UXC_PATH, max_bytes=READ_CHUNK_BYTES),
-            executable=True,
-        )
-        try:
-            parts: list[bytes] = []
-            offset = 0
-            while offset < total_size:
-                chunk_len = min(READ_CHUNK_BYTES, total_size - offset)
-                hex_str = (
-                    sh(f"{reader} 0x{offset:x} {chunk_len}", timeout=20)
-                    .strip()
-                    .replace(" ", "")
-                    .replace("\n", "")
-                )
-                chunk = bytes.fromhex(hex_str)
-                if len(chunk) != chunk_len:
-                    raise RuntimeError(
-                        f"读取 {CAMERA_UXC_PATH} @{offset:#x} 长度不足: {len(chunk)}/{chunk_len}"
-                    )
-                parts.append(chunk)
-                offset += chunk_len
-        finally:
-            try:
-                sh(f"rm -f {reader}")
-            except Exception:
-                pass
-
-        data = b"".join(parts)
-        got_md5 = hashlib.md5(data).hexdigest()
-        if got_md5 != want_md5:
-            raise RuntimeError(f"MD5 校验失败: 期望 {want_md5}, 实际 {got_md5}")
-        return data
+        return read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
 
 
 def generate_local_header(

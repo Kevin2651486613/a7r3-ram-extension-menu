@@ -36,15 +36,23 @@ git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
   # Apple Silicon LLVM 常见路径: /opt/homebrew/opt/llvm/bin
   # Intel Mac LLVM 常见路径:     /usr/local/opt/llvm/bin
   ```
+  *(注：若系统在 MSC 模式自动挂载存储卷导致打开失败，需留意先卸载卷或检查 USB 权限；Apple Silicon 安装 `keystone-engine` 需视 Python 版本确保编译/wheel 环境可用。)*
 - **Linux (Ubuntu / Debian)**：
   ```bash
   sudo apt install clang lld llvm libusb-1.0-0 ffmpeg
   ```
-- **Windows**：安装 LLVM 官方预编译包（含 `clang`、`ld.lld`、`llvm-readelf`）及 WinUSB/libusb-K 驱动（`Sony-PMCA-RE` 连接相机需要）。
+  *(普通用户需配置 Sony `054c` 的 `udev` 规则或用 `sudo` 运行注入。)*
+- **Windows**：安装 LLVM 官方预编译包（含 `clang`、`ld.lld`、`llvm-readelf`）；并使用 **Zadig** 为 Sony 相机接口绑定 **`libusb-win32`**（推荐）或 `libusbK` 驱动（因 `Sony-PMCA-RE` 的 Windows 原生 Service Mode 驱动为占位未实现）。
 
-### 2.2 配置 `.env.local`
+### 2.2 一键从相机初始化或手动配置 `.env.local`
 
-本仓库**不包含任何本机绝对路径或原厂系统库文件**。`tools/` 下的脚本统一通过 `tools/env_config.py` 读取仓库根目录的 `.env.local`（已被 `.gitignore` 忽略），也可直接读取系统环境变量或命令行参数：
+如果已连接相机，推荐直接运行（只读拉取至被 `.gitignore` 忽略的 `firmware/lib/` 与 `src/a7r3_dual_hud_payload.local.h`，**自动识别，无需手动填写 `.env.local`**）：
+
+```powershell
+python tools/a7r3_addon_console.py init-camera
+```
+
+本仓库**不包含任何本机绝对路径或原厂系统库文件**。若使用本机已有固件目录，`tools/` 下的脚本统一通过 `tools/env_config.py` 读取根目录 `.env.local`（已被 `.gitignore` 忽略）：
 
 ```bash
 cp .env.example .env.local
@@ -110,6 +118,7 @@ python tools/a7r3_addon_console.py status   # 查看 PID、10 项钩子状态与
 python tools/a7r3_addon_console.py open     # 兼容保留（主要供 MD3 版弹窗遥控测试；原生 Tab 7 按 MENU 即见）
 python tools/a7r3_addon_console.py quit     # 安全还原所有 GOT/vptr 钩子并退出工作线程
 python tools/a7r3_addon_console.py gen-payload --from-camera  # 从已连接相机生成本地 Dual-HUD 载荷
+python tools/a7r3_addon_console.py init-camera                # 一次性从相机只读初始化 /lib 三件套 + Dual-HUD 载荷
 ```
 
 部署成功时，日志与自检输出应全部显示 `[OK]`：
