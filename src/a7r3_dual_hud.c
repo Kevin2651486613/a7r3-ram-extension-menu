@@ -304,6 +304,11 @@ void a7r3_dual_hud_remove(void)
     a7r3_log_hex("SDK_DUAL_RESTORED=", 1UL);
 }
 
+int a7r3_dual_hud_has_payload(void)
+{
+    return A7R3_DUAL_HUD_HAS_PAYLOAD;
+}
+
 void a7r3_dual_hud_set_enabled(int enable)
 {
     int on = enable ? 1 : 0;

@@ -54,6 +54,7 @@ cp .env.example .env.local
 | --- | --- | --- |
 | `A7R3_LLVM_BIN` | `/opt/homebrew/opt/llvm/bin` | 包含 `clang`、`ld.lld`、`llvm-readelf` 的目录（未设置时自动查找 `PATH` 中的 `clang`） |
 | `A7R3_FW_LIB_DIR` | `/path/to/your/a7r3_v310_extraction/lib` | 用户自行从合法持有的设备/固件中本地提取的 `/lib`（仅编译 `.so` 时需要 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so`） |
+| `A7R3_UXC_PATH` | `/path/to/.../usr/share/app/viewStlrec.uxc` | 可选：本地 `viewStlrec.uxc` 路径；未填时会在 `A7R3_FW_LIB_DIR` 相邻目录自动探测生成 `src/a7r3_dual_hud_payload.local.h` |
 | `A7R3_PMCA_DIR` | `/path/to/Sony-PMCA-RE` | 若已克隆至 `./Sony-PMCA-RE` 或 `../Sony-PMCA-RE`，或通过 pip 安装，可留空自动识别 |
 | `A7R3_FONT_BOLD` / `A7R3_FONT_REG` | `/System/Library/Fonts/PingFang.ttc` | 仅重新生成 MD3 中文点阵字模时使用（Route A1 原生第 7 大类不需要此项） |
 
@@ -85,6 +86,9 @@ python tools/build_addon.py --src src/demo_cert_entry.c --out build/demo_cert_en
 
 # 如修改了 MD3 中文菜单文本（SPECS），重新生成 md3_demo_labels.h
 python tools/gen_md3_assets.py
+
+# 手动从本地 viewStlrec.uxc 或已连接相机只读生成受忽略的本地 Dual-HUD 载荷
+python tools/gen_dual_hud_payload.py --from-camera
 ```
 
 ---
@@ -105,6 +109,7 @@ python tools/a7r3_addon_console.py update   # 先重新编译再热部署（开�
 python tools/a7r3_addon_console.py status   # 查看 PID、10 项钩子状态与最近 25 行 /tmp_bt/addon.log
 python tools/a7r3_addon_console.py open     # 兼容保留（主要供 MD3 版弹窗遥控测试；原生 Tab 7 按 MENU 即见）
 python tools/a7r3_addon_console.py quit     # 安全还原所有 GOT/vptr 钩子并退出工作线程
+python tools/a7r3_addon_console.py gen-payload --from-camera  # 从已连接相机生成本地 Dual-HUD 载荷
 ```
 
 部署成功时，日志与自检输出应全部显示 `[OK]`：

@@ -7,6 +7,7 @@ int  a7r3_dual_hud_install(void);
 void a7r3_dual_hud_remove(void);
 
 /* Enable or disable simultaneous Level + Histogram in LCD Level mode (Mode 4). */
+int  a7r3_dual_hud_has_payload(void);
 void a7r3_dual_hud_set_enabled(int enable);
 int  a7r3_dual_hud_get_enabled(void);
 

@@ -41,7 +41,7 @@
 | **原生菜单纯内存触摸控制** | [a7r3_menu_touch.c](src/a7r3_menu_touch.c) / [a7r3_input.c](src/a7r3_input.c) | **零 `.text` 代码补丁、零堆扫描**；在第 7 大类第 1 页第 4 项提供开关；通过可写虚表追踪 `ViewSettingMenu`、`PAS_MenuListTab`、自定义按键列表/功能页及白平衡专用页；支持 7 大类一步直达、标题栏翻页、6 行直达打开、二级弹窗（含滚动列表与框外取消）、不可设定提示全屏点击返回与白平衡左侧滚轮点选 |
 | 原生菜单无痕入口 + MD3 双页 UI（兼容保留） | [a7r3_entry_cert.c](src/a7r3_entry_cert.c) / [demo_cert_entry.c](src/demo_cert_entry.c) | 解除隐藏并切换「认证标识 (`0x10f`)」`vptr`，在纯 RAM 显存绘制 MD3 双页卡片（位于 `main` / `v1.0-md3`，仍可单独编译） |
 | 屏蔽曝光补偿波轮 | [a7r3_input.c](src/a7r3_input.c) | 钩住 `osal_rcv_msg_tmo`、`get_phy` / `get_ev` 并拦截 `0x70d2` / `0x70d3`，同时提供 OSAL 队列按键注入与非吞噬式触控释放监听 |
-| 水平仪与直方图同显（可选本地载荷） | [a7r3_dual_hud.c](src/a7r3_dual_hud.c) | 钩住 `getResID` / `RecDtor` / `UserGetLayoutMode` / 路由槽；**默认无载荷透传编译**，用户可自行提供本地提取修改的 `src/a7r3_dual_hud_payload.local.h` 启用 |
+| 水平仪与直方图同显（自动/本地生成载荷） | [a7r3_dual_hud.c](src/a7r3_dual_hud.c) / [gen_dual_hud_payload.py](tools/gen_dual_hud_payload.py) | 钩住 `getResID` / `RecDtor` / `UserGetLayoutMode` / 路由槽；**默认无载荷安全透传并在菜单置灰**，构建时自动从本地 `viewStlrec.uxc`（或运行 `--from-camera` 从已连接相机只读读取）生成受 `.gitignore` 忽略的 `src/a7r3_dual_hud_payload.local.h` 启用 |
 | 相册回放显示对焦点 | [a7r3_pb_focus.c](src/a7r3_pb_focus.c) | `FeaCore` + `PlayStillSingle` 捕获 EXIF，机内解析 Sony MakerNote (`0x2027`) 对焦坐标并叠绘像素级无损红框，兼容连拍组/DISP/缩放/MENU 退让 |
 | 电子快门自定义快门音效 | [a7r3_shutter_sfx.c](src/a7r3_shutter_sfx.c) | 钩住 `ObjStillRecorder::ParseRecCntInfoPinCommand`；使用线程安全 `Backup_read(0x01070b2c)` 判定静音状态；绕开 8.3 限制调用 `PrFILE_fsfirst`/`pf2_fopen` 扫描 `/SHUTTER_SFX/*.wav`；机内 WAV→Sony 32B BFP 编码 + `futex` + `DataflowInfraCh::sndAsyncDataflowMsg` 异步发声 |
 
@@ -67,6 +67,7 @@ a7r3-ram-extension-menu/
 │   ├── a7r3_addon_console.py          # 交互式 / CLI 控制台（含离线自检 check 与安全部署）
 │   ├── build_addon.py                 # freestanding 编译、自动生成字模与 ELF 严格校验
 │   ├── deploy_ram.py                  # 带多重边界校验的纯 RAM (/tmp_bt) 注入器
+│   ├── gen_dual_hud_payload.py        # 从本机或已连接相机的 viewStlrec.uxc 自动生成本地双显载荷
 │   ├── gen_md3_assets.py              # 从本机系统字体实时生成 4-bit 中文点阵头文件
 │   └── ram_loader/                    # 纯 RAM 注入助手（全内置 MIT 实现）
 │       ├── build_ram_tools.py         # 远程 SVC 与 ARM dlopen 跳板生成器
@@ -128,6 +129,13 @@ python tools/a7r3_addon_console.py update   # 编译 + 检查 + 安全部署
 python tools/a7r3_addon_console.py status   # 查看 10 项钩子状态与日志
 python tools/a7r3_addon_console.py quit     # 安全卸载并还原全部原生钩子
 ```
+
+> [!TIP]
+> **启用“水平仪与直方图同显”**：仓库遵循零固件合规原则，默认不分发修改后的原厂 `.uxc` 布局字节（未配置时该菜单项自动显示为灰色）。若你的 `A7R3_FW_LIB_DIR` 同级包含完整 `usr/share/app/viewStlrec.uxc`，编译时会自动生成 `src/a7r3_dual_hud_payload.local.h`；若本地仅有 `lib/`，可在连接相机后运行一次：
+> ```bash
+> python tools/a7r3_addon_console.py gen-payload --from-camera
+> python tools/a7r3_addon_console.py update
+> ```
 
 ### 4. SD 卡自定义音效准备（可选）
 

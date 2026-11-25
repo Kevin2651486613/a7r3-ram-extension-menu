@@ -139,7 +139,11 @@ def print_hook_summary(log_text: str) -> None:
         mark = "[OK]" if ok else "[--]"
         print(f"  {mark} {desc} ({token})")
     if "SDK_DUAL_NO_LOCAL_PAYLOAD" in seg:
-        print("  [NOTE] 未提供本地 a7r3_dual_hud_payload.local.h，水平仪与直方图同显处于透传模式。")
+        print(
+            "  [NOTE] 未提供本地 a7r3_dual_hud_payload.local.h，水平仪与直方图同显已置灰禁用（纯透传）。\n"
+            "         连接相机后运行 `python tools/a7r3_addon_console.py gen-payload --from-camera`\n"
+            "         或指定本地 viewStlrec.uxc 生成后执行 `update` 即可启用。"
+        )
 
 
 def safe_quit(sh, timeout_s: float = 4.0) -> bool:
@@ -249,7 +253,20 @@ def action_check(so_path: Path) -> int:
     print(f"  [{'OK' if helpers_ok else 'WARN'}] 内置注入助手 (terminal_shell / mem_writer / show_hex): {helpers_msg}")
 
     local_payload = SDK_DIR / "src" / "a7r3_dual_hud_payload.local.h"
-    print(f"  [INFO] 可选本地 Dual-HUD 载荷: {'已配置 (.local.h)' if local_payload.is_file() else '未配置 (纯透传构建)'}")
+    if local_payload.is_file():
+        payload_msg = "已配置 (.local.h)"
+    else:
+        try:
+            from gen_dual_hud_payload import find_local_uxc
+
+            found_uxc = find_local_uxc(Path(fw_env) if fw_env else None)
+        except Exception:
+            found_uxc = None
+        if found_uxc is not None:
+            payload_msg = f"未生成，但已检测到 {found_uxc.name} (编译或运行 gen-payload 时将自动生成)"
+        else:
+            payload_msg = "未配置 (水平仪直方图同显将置灰；连接相机运行 `gen-payload --from-camera` 可生成)"
+    print(f"  [INFO] 可选本地 Dual-HUD 载荷: {payload_msg}")
 
     if so_path.exists():
         try:
@@ -352,6 +369,31 @@ def action_build(so_path: Path) -> int:
     return 0
 
 
+def action_gen_payload(from_camera: bool = False, force: bool = False) -> int:
+    from gen_dual_hud_payload import (
+        CAMERA_UXC_PATH,
+        DEFAULT_OUT,
+        find_local_uxc,
+        generate_local_header,
+        pull_uxc_from_camera,
+    )
+
+    if not from_camera:
+        uxc_path = find_local_uxc()
+        if uxc_path is not None:
+            out = generate_local_header(uxc_path.read_bytes(), out_path=DEFAULT_OUT)
+            print(f"[+] 已从本地固件文件生成双显载荷: {out} (来源: {uxc_path})")
+            return 0
+        print("[*] 本地未检测到 viewStlrec.uxc，尝试从已连接相机只读读取...")
+
+    print(f"[*] 正在从相机只读获取 {CAMERA_UXC_PATH} (零闪存写入)...")
+    uxc_bytes = pull_uxc_from_camera(force=force)
+    out = generate_local_header(uxc_bytes, out_path=DEFAULT_OUT)
+    print(f"[+] 已从相机本机生成双显载荷: {out}")
+    print("[*] 请执行 `[6] 一键编译并热更新部署` (update) 使同显功能生效。")
+    return 0
+
+
 def action_update(so_path: Path, force: bool = False) -> int:
     rc = action_build(so_path)
     if rc != 0:
@@ -381,6 +423,7 @@ def print_banner(so_path: Path) -> None:
     print("  [5] 重新编译插件 (.so)")
     print("  [6] 一键编译并热更新部署到相机")
     print("  [7] 环境与边界安全自检 (离线检查，无需连接相机)")
+    print("  [8] 生成本地双显载荷 (a7r3_dual_hud_payload.local.h)")
     print("  [0] 退出控制台")
     print("-" * 64)
 
@@ -389,7 +432,7 @@ def interactive_loop(so_path: Path, force: bool = False) -> int:
     while True:
         print_banner(so_path)
         try:
-            choice = input("请选择操作编号 [0-7]: ").strip()
+            choice = input("请选择操作编号 [0-8]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n已退出。")
             return 0
@@ -416,6 +459,8 @@ def interactive_loop(so_path: Path, force: bool = False) -> int:
                 action_update(so_path, force=force)
             elif choice == "7":
                 action_check(so_path)
+            elif choice == "8":
+                action_gen_payload(force=force)
             else:
                 print(f"[!] 无效选项: {choice!r}")
         except KeyboardInterrupt:
@@ -439,8 +484,13 @@ def main() -> int:
     ap.add_argument(
         "action",
         nargs="?",
-        choices=("deploy", "status", "open", "quit", "build", "update", "check"),
+        choices=("deploy", "status", "open", "quit", "build", "update", "check", "gen-payload"),
         help="可选直接执行的子命令；不填则进入交互式菜单",
+    )
+    ap.add_argument(
+        "--from-camera",
+        action="store_true",
+        help="配合 gen-payload 使用：直接从已连接相机只读读取 viewStlrec.uxc",
     )
     ap.add_argument(
         "--so",
@@ -479,6 +529,8 @@ def main() -> int:
             return action_build(args.so)
         if args.action == "update":
             return action_update(args.so, force=args.force)
+        if args.action == "gen-payload":
+            return action_gen_payload(from_camera=args.from_camera, force=args.force)
     except KeyboardInterrupt:
         print("\n[!] 操作已被用户中断。")
         return 130

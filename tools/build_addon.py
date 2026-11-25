@@ -97,6 +97,30 @@ def ensure_generated_labels(src_path: Path) -> int:
     return res.returncode
 
 
+def ensure_dual_hud_payload(fw_lib_dir: Path | None) -> None:
+    """Auto-generate gitignored src/a7r3_dual_hud_payload.local.h if viewStlrec.uxc is nearby."""
+    payload_h = SRC_DIR / "a7r3_dual_hud_payload.local.h"
+    if payload_h.is_file():
+        return
+    try:
+        from gen_dual_hud_payload import find_local_uxc, generate_local_header
+    except Exception:
+        return
+    uxc_path = find_local_uxc(fw_lib_dir=fw_lib_dir)
+    if uxc_path is not None:
+        try:
+            generate_local_header(uxc_path.read_bytes(), out_path=payload_h)
+            print(f"[+] Auto-generated local {payload_h.name} from {uxc_path}")
+            return
+        except Exception as exc:
+            print(f"[!] Warning: failed to generate {payload_h.name} from {uxc_path}: {exc}")
+    print(
+        "[*] Info: src/a7r3_dual_hud_payload.local.h not present and viewStlrec.uxc not found locally; "
+        "Dual-HUD toggle will be grayed out (pass-through). Run `python tools/gen_dual_hud_payload.py "
+        "--from-camera` (or `--uxc <viewStlrec.uxc>`) to enable."
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -162,6 +186,7 @@ def main() -> int:
     rc_gen = ensure_generated_labels(args.src)
     if rc_gen != 0:
         return rc_gen
+    ensure_dual_hud_payload(fw_lib_dir)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [

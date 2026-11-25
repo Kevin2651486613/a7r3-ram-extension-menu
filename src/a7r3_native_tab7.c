@@ -377,7 +377,10 @@ static const char *lookup_synthetic_utf8(unsigned res_id)
     case STR_SYN_EV_SHIELD_T: return "屏蔽曝光补偿波轮";
     case STR_SYN_EV_SHIELD_G: return "将物理曝光补偿拨盘输入始终固定为 0";
     case STR_SYN_DUAL_HUD_T:  return "水平仪与直方图同显";
-    case STR_SYN_DUAL_HUD_G:  return "在电子水平仪模式下同步显示实时直方图";
+    case STR_SYN_DUAL_HUD_G:
+        return a7r3_dual_hud_has_payload()
+            ? "在电子水平仪模式下同步显示实时直方图"
+            : "未编入本地 .local.h 载荷，当前为透传模式";
     case STR_SYN_PB_FOCUS_T:  return "相册显示焦点位置";
     case STR_SYN_PB_FOCUS_G:  return "回放照片时在画面上叠加标注对焦点位置";
     case STR_SYN_TOUCH_T:     return "菜单触摸控制";
@@ -553,6 +556,8 @@ static int mgr_set_value_hook(void *mgr, int proc_id, int val)
 __attribute__((noinline))
 static int mgr_is_grayout_hook(void *mgr, int proc_id)
 {
+    if (proc_id == PROC_ID_EXT_DUAL_HUD && !a7r3_dual_hud_has_payload())
+        return 1;
     if (is_ext_proc(proc_id))
         return 0;
     return g_real_is_grayout(mgr, proc_id);
@@ -561,6 +566,8 @@ static int mgr_is_grayout_hook(void *mgr, int proc_id)
 __attribute__((noinline))
 static int mgr_is_grayout_val_hook(void *mgr, int proc_id, int val)
 {
+    if (proc_id == PROC_ID_EXT_DUAL_HUD && !a7r3_dual_hud_has_payload())
+        return 1;
     if (is_ext_proc(proc_id))
         return 0;
     return g_real_is_grayout_val(mgr, proc_id, val);

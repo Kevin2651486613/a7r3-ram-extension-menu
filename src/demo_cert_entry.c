@@ -449,10 +449,19 @@ static void render_addon_card(void)
             else
                 a7r3_md3_stroke_rrect(g_canvas, ROW_X, ry, ROW_W, ROW_H, ROW_R, 1, th->outline_var);
 
+            int row_disabled = (r == 1 && !a7r3_dual_hud_has_payload());
             draw_row_icon(ROW_X + 12, ry + 11, r, th);
-            draw_lbl(ROW_X + 60, ry + 11, g_row_titles[r], th->on_surface);
+            draw_lbl(ROW_X + 60, ry + 11, g_row_titles[r],
+                     row_disabled ? th->on_surface_var : th->on_surface);
             draw_lbl(ROW_X + 60, ry + 33, g_row_subs[r], th->on_surface_var);
-            if (r < 3) {
+            if (row_disabled) {
+                a7r3_md3_fill_rrect(g_canvas, ROW_X + ROW_W - 72, ry + 16, 54, 26, 13,
+                                    th->surface_high);
+                a7r3_md3_stroke_rrect(g_canvas, ROW_X + ROW_W - 72, ry + 16, 54, 26, 13, 1,
+                                      th->outline_var);
+                draw_lbl_centered(ROW_X + ROW_W - 72, ry + 16, 54, 26,
+                                  &LBL_STATE_OFF, th->outline_var);
+            } else if (r < 3) {
                 a7r3_md3_switch(g_canvas, ROW_X + ROW_W - 66, ry + 13, g_item_vals[r], th);
             } else {
                 int sfx_on = a7r3_shutter_sfx_get_enabled();
@@ -590,12 +599,19 @@ static void on_external_dismiss(unsigned code, unsigned status)
 
 static void sync_item_action(int row)
 {
-    if (row == 0)
+    if (row == 0) {
         a7r3_input_set_ev_dial_shield(g_item_vals[0]);
-    else if (row == 1)
+    } else if (row == 1) {
+        if (!a7r3_dual_hud_has_payload()) {
+            if (g_item_vals[1])
+                a7r3_dual_hud_set_enabled(1);
+            g_item_vals[1] = 0;
+            return;
+        }
         a7r3_dual_hud_set_enabled(g_item_vals[1]);
-    else if (row == 2)
+    } else if (row == 2) {
         a7r3_pb_focus_set_enabled(g_item_vals[2]);
+    }
 }
 
 static void reset_defaults(void)
