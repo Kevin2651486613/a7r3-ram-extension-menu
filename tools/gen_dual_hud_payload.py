@@ -211,11 +211,16 @@ def format_local_header(payload: bytes) -> str:
 
 def pull_uxc_from_camera(force: bool = False) -> bytes:
     """Read `/usr/share/app/viewStlrec.uxc` read-only over USB Service Terminal."""
-    from deploy_ram import ensure_service_terminal, importDriver, require_usb_runtime, upload_tmpbt
-    from pmca.platform.backend.senser import SenserPlatformBackend
-    from pmca.usb.sony import SonySenserCamera
+    from deploy_ram import (
+        SenserPlatformBackend,
+        SonySenserCamera,
+        ensure_service_terminal,
+        importDriver,
+        require_usb_runtime,
+        shell_command,
+        upload_tmpbt,
+    )
     from ram_loader.build_show_hex import build_show_hex_elf
-    from ram_loader.terminal_shell import shell_command
 
     require_usb_runtime()
     with importDriver("libusb") as driver:

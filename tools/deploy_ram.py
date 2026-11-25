@@ -408,7 +408,7 @@ def cmd_deploy(backend, sh, so_path: Path, open_now: bool, force: bool = False) 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("action", nargs="?", default="deploy", choices=("deploy", "open", "status", "quit"))
-    ap.add_argument("--so", type=Path, default=SDK_DIR / "build" / "demo_addon_ram.so")
+    ap.add_argument("--so", type=Path, default=SDK_DIR / "build" / "demo_native_tab7_ram.so")
     ap.add_argument("--open", action="store_true", help="Open add-on card immediately after deploy")
     ap.add_argument("--force", action="store_true", help="Bypass PID/model/module safety checks")
     args = ap.parse_args()
