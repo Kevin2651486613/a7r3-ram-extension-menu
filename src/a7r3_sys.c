@@ -7,9 +7,13 @@ struct a7r3_pm_rng {
     int writable;
 };
 
-static struct a7r3_pm_rng g_rng[A7R3_PM_RNG_MAX];
-static int g_rng_n;
-static int g_rng_loaded;
+static struct a7r3_pm_rng g_rng[2][A7R3_PM_RNG_MAX];
+static int g_rng_n[2];
+static volatile int g_rng_idx;
+static volatile int g_rng_loaded;
+static volatile unsigned g_maps_lock;
+static unsigned g_last_reload_ms;
+static char g_maps_buf[131072];
 static char g_log_path[128] = "/tmp_bt/addon.log";
 
 long a7r3_sys2(long nr, long a1, long a2)
@@ -192,81 +196,151 @@ static unsigned long parse_hex(const char **s)
     return v;
 }
 
-static void pm_load_maps(void)
+static void pm_lock_acquire(void)
 {
-    static char buf[131072];
-    int fd, n = 0;
-    const char *p, *end;
+    while (__atomic_exchange_n(&g_maps_lock, 1u, __ATOMIC_ACQUIRE) != 0u)
+        a7r3_nanosleep_ms(1u);
+}
 
-    if (g_rng_loaded)
-        return;
-    g_rng_loaded = 1;
-    fd = a7r3_open("/proc/self/maps", A7R3_O_RDONLY, 0);
+static void pm_lock_release(void)
+{
+    __atomic_store_n(&g_maps_lock, 0u, __ATOMIC_RELEASE);
+}
+
+static int pm_read_maps_locked(void)
+{
+    int fd = a7r3_open("/proc/self/maps", A7R3_O_RDONLY, 0);
+    int n = 0;
+
     if (fd < 0)
-        return;
-    while (n < (int)sizeof(buf) - 1) {
-        long r = a7r3_read(fd, buf + n, sizeof(buf) - 1u - (size_t)n);
+        return -1;
+    while (n < (int)sizeof(g_maps_buf) - 1) {
+        long r = a7r3_read(fd, g_maps_buf + n, sizeof(g_maps_buf) - 1u - (size_t)n);
         if (r <= 0)
             break;
         n += (int)r;
     }
     a7r3_close(fd);
     if (n <= 0)
+        return -1;
+    g_maps_buf[n] = 0;
+    return n;
+}
+
+static void pm_reload_locked(void)
+{
+    int n = pm_read_maps_locked();
+    int next = __atomic_load_n(&g_rng_idx, __ATOMIC_RELAXED) ^ 1;
+    struct a7r3_pm_rng *dst = g_rng[next];
+    int cnt = 0;
+    const char *p, *end;
+
+    if (n <= 0) {
+        __atomic_store_n(&g_rng_loaded, 1, __ATOMIC_RELEASE);
+        g_last_reload_ms = a7r3_now_ms();
         return;
-    buf[n] = 0;
-    p = buf;
-    end = buf + n;
-    while (p < end && g_rng_n < A7R3_PM_RNG_MAX) {
-        const char *line = p, *next, *q;
+    }
+
+    p = g_maps_buf;
+    end = g_maps_buf + n;
+    while (p < end && cnt < A7R3_PM_RNG_MAX) {
+        const char *line = p, *next_line, *q;
         unsigned long lo, hi;
         while (p < end && *p != '\n')
             p++;
-        next = (p < end) ? p + 1 : end;
+        next_line = (p < end) ? p + 1 : end;
         q = line;
         lo = parse_hex(&q);
         if (q < p && *q == '-') {
             q++;
             hi = parse_hex(&q);
             if (q + 2 < p && q[0] == ' ' && q[1] == 'r' && hi > lo) {
-                g_rng[g_rng_n].lo = lo;
-                g_rng[g_rng_n].hi = hi;
-                g_rng[g_rng_n].writable = (q[2] == 'w');
-                g_rng_n++;
+                dst[cnt].lo = lo;
+                dst[cnt].hi = hi;
+                dst[cnt].writable = (q[2] == 'w');
+                cnt++;
             }
         }
-        p = next;
+        p = next_line;
     }
+
+    g_rng_n[next] = cnt;
+    a7r3_dsb();
+    __atomic_store_n(&g_rng_idx, next, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_rng_loaded, 1, __ATOMIC_RELEASE);
+    g_last_reload_ms = a7r3_now_ms();
+}
+
+static int pm_find_range(const struct a7r3_pm_rng *rng, int n,
+                         unsigned long a, unsigned long b, int need_write)
+{
+    int i;
+    for (i = 0; i < n; i++) {
+        if ((!need_write || rng[i].writable) && a >= rng[i].lo && b <= rng[i].hi)
+            return 1;
+    }
+    return 0;
+}
+
+static int pm_check_range(const void *p, unsigned len, int need_write)
+{
+    unsigned long a = (unsigned long)p;
+    unsigned long b = a + len;
+    int idx, ok;
+    unsigned now;
+
+    if (!len || a < 0x8000UL || b <= a)
+        return 0;
+
+    if (__atomic_load_n(&g_rng_loaded, __ATOMIC_ACQUIRE)) {
+        idx = __atomic_load_n(&g_rng_idx, __ATOMIC_ACQUIRE);
+        if (pm_find_range(g_rng[idx], g_rng_n[idx], a, b, need_write))
+            return 1;
+    }
+
+    /* Newly mapped heap/mmap arenas (e.g. menu widgets created after startup)
+     * miss the initial cache; refresh maps lazily before rejecting access. */
+    pm_lock_acquire();
+    idx = __atomic_load_n(&g_rng_idx, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&g_rng_loaded, __ATOMIC_RELAXED) &&
+        pm_find_range(g_rng[idx], g_rng_n[idx], a, b, need_write)) {
+        pm_lock_release();
+        return 1;
+    }
+    now = a7r3_now_ms();
+    if (!__atomic_load_n(&g_rng_loaded, __ATOMIC_RELAXED) ||
+        (unsigned)(now - g_last_reload_ms) >= 10u) {
+        pm_reload_locked();
+        idx = __atomic_load_n(&g_rng_idx, __ATOMIC_RELAXED);
+    }
+    ok = __atomic_load_n(&g_rng_loaded, __ATOMIC_RELAXED)
+             ? pm_find_range(g_rng[idx], g_rng_n[idx], a, b, need_write)
+             : 0;
+    pm_lock_release();
+    return ok;
 }
 
 void a7r3_maps_reload(void)
 {
-    g_rng_loaded = 0;
-    g_rng_n = 0;
-    pm_load_maps();
+    pm_lock_acquire();
+    pm_reload_locked();
+    pm_lock_release();
 }
 
 unsigned long a7r3_mod_base(const char *needle)
 {
-    static char buf[131072];
-    int fd, n = 0;
+    int n;
     char *p, *end;
     unsigned long best = 0;
 
-    fd = a7r3_open("/proc/self/maps", A7R3_O_RDONLY, 0);
-    if (fd < 0)
+    pm_lock_acquire();
+    n = pm_read_maps_locked();
+    if (n <= 0) {
+        pm_lock_release();
         return 0;
-    while (n < (int)sizeof(buf) - 1) {
-        long r = a7r3_read(fd, buf + n, sizeof(buf) - 1u - (size_t)n);
-        if (r <= 0)
-            break;
-        n += (int)r;
     }
-    a7r3_close(fd);
-    if (n <= 0)
-        return 0;
-    buf[n] = 0;
-    p = buf;
-    end = buf + n;
+    p = g_maps_buf;
+    end = g_maps_buf + n;
     while (p < end) {
         char *line = p;
         const char *q;
@@ -282,39 +356,18 @@ unsigned long a7r3_mod_base(const char *needle)
                 best = lo;
         }
     }
+    pm_lock_release();
     return best;
 }
 
 int a7r3_pm_readable(const void *p, unsigned len)
 {
-    unsigned long a = (unsigned long)p;
-    unsigned long b = a + len;
-    int i;
-    if (!len || b <= a)
-        return 0;
-    if (!g_rng_loaded)
-        pm_load_maps();
-    for (i = 0; i < g_rng_n; i++) {
-        if (a >= g_rng[i].lo && b <= g_rng[i].hi)
-            return 1;
-    }
-    return 0;
+    return pm_check_range(p, len, 0);
 }
 
 int a7r3_pm_writable(const void *p, unsigned len)
 {
-    unsigned long a = (unsigned long)p;
-    unsigned long b = a + len;
-    int i;
-    if (!len || b <= a)
-        return 0;
-    if (!g_rng_loaded)
-        pm_load_maps();
-    for (i = 0; i < g_rng_n; i++) {
-        if (g_rng[i].writable && a >= g_rng[i].lo && b <= g_rng[i].hi)
-            return 1;
-    }
-    return 0;
+    return pm_check_range(p, len, 1);
 }
 
 void a7r3_log_init(const char *path)

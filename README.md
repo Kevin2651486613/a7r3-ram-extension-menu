@@ -7,9 +7,9 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)]()
 
 > [!NOTE]
-> **分支版本说明**：
-> - `main`（Tag: `v1.0-md3`）：Material Design 3 自绘卡片菜单版（通过劫持设置第 7 页「认证标识」弹出）。
-> - **`feat/native-tab7-a1`（当前分支，Tag: `v2.0-native-tab7`）**：**原生索尼 UI 第 7 大类 + 纯内存菜单触摸版（Route A1）**——无需任何全屏显存自绘与防闪烁守卫，直接在原厂 `MENU` 顶栏新增第 7 个大类 Tab，使用原厂 GPU 渲染与索尼中文字库、原生二级选择弹窗与拨轮/按键交互，并内置第 1 页第 4 项可开关的 **「菜单触摸控制」**。
+> **版本与分支说明**：
+> - Tag `v1.0-md3`：早期 Material Design 3 自绘卡片菜单版（通过劫持设置第 7 页「认证标识」弹出；`src/demo_cert_entry.c` 仍可在当前分支单独编译）。
+> - **`main` / `feat/native-tab7-a1`（当前最新，Route A1 主线）**：**原生索尼 UI 第 7 大类 + 纯内存菜单触摸版**——无需任何全屏显存自绘与防闪烁守卫，直接在原厂 `MENU` 顶栏新增第 7 个大类 Tab，使用原厂 GPU 渲染与索尼中文字库、原生二级选择弹窗与拨轮/按键交互，内置第 1 页第 4 项可开关的 **「菜单触摸控制」**；已完整内置 MIT 协议纯内存注入助手与 `requirements.txt`（支持 Windows / macOS / Linux），并修复冷启动后动态堆区扩增导致的 `/proc/self/maps` 缓存过期问题。
 
 > [!WARNING]
 > **测试开发与合规声明（必读）**：
@@ -55,6 +55,7 @@ a7r3-ram-extension-menu/
 ├── DISCLAIMER.md                      # 测试开发声明、稳定性警告与开源合规声明（必读）
 ├── LICENSE                            # MIT 开源协议
 ├── CREDITS.md                         # 致谢与外部依赖说明
+├── requirements.txt                   # Python 构建与 USB 注入依赖清单（跨平台）
 ├── .env.example                       # 环境变量模板（复制到 .env.local 进行本机配置）
 ├── .gitignore                         # 忽略 build/、.env.local、*.local.h、生成字模等
 ├── 启动拓展菜单工具.bat                # Windows 控制台一键启动入口
@@ -93,8 +94,9 @@ git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
 
 复制 `.env.example` 为 `.env.local`（已被 `.gitignore` 忽略）并填写路径：
 
-```powershell
-copy .env.example .env.local
+```bash
+# Windows: copy .env.example .env.local
+cp .env.example .env.local
 # 填写 A7R3_LLVM_BIN、合法提取的 A7R3 v3.10 /lib（含 libc/libdl/libpthread 2.11.2），
 # 以及 A7R3_PMCA_DIR（若放在 ./Sony-PMCA-RE 或 ../Sony-PMCA-RE 可自动识别）
 ```
