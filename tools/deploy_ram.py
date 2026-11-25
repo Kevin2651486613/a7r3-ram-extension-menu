@@ -47,10 +47,14 @@ except Exception as exc:  # pragma: no cover
 
 _USB_IMPORT_ERR: Exception | None = None
 try:
-    from pmca.commands.usb import getDevice, importDriver, listDevices
+    from pmca.commands.usb import UsbDriverList, getDevice, importDriver, listDevices
     from pmca.platform.backend.senser import SenserPlatformBackend
+    from pmca.usb.driver.generic import libusb as _pmca_libusb
     from pmca.usb.sony import (
+        SONY_ID_PRODUCT_SENSER,
+        SONY_ID_VENDOR,
         SonyMscExtCmdDevice,
+        SonyMtpExtCmdDevice,
         SonySenserAuthDevice,
         SonySenserCamera,
         SonySenserDevice,
@@ -60,11 +64,16 @@ try:
     SonySenserAuthDevice.stop = lambda self: None
 except Exception as exc:  # pragma: no cover - deferred until USB actions run
     _USB_IMPORT_ERR = exc
+    UsbDriverList = None  # type: ignore[assignment]
     getDevice = None  # type: ignore[assignment]
     importDriver = None  # type: ignore[assignment]
     listDevices = None  # type: ignore[assignment]
+    _pmca_libusb = None  # type: ignore[assignment]
+    SONY_ID_PRODUCT_SENSER = (0x02A9, 0x0336)
+    SONY_ID_VENDOR = 0x054C
     SenserPlatformBackend = None  # type: ignore[assignment]
     SonyMscExtCmdDevice = None  # type: ignore[assignment]
+    SonyMtpExtCmdDevice = None  # type: ignore[assignment]
     SonySenserAuthDevice = None  # type: ignore[assignment]
     SonySenserCamera = None  # type: ignore[assignment]
     SonySenserDevice = None  # type: ignore[assignment]
@@ -170,11 +179,124 @@ def check_camera_model(dev, force: bool = False) -> None:
         )
 
 
+def open_usb_drivers():
+    """Open PMCA USB drivers safely across Windows, macOS, and Linux."""
+    require_usb_runtime()
+    if sys.platform == "win32":
+        contexts = []
+        try:
+            from pmca.usb.driver.windows.msc import MscContext as WinMscContext
+
+            contexts.append(WinMscContext())
+        except Exception:
+            pass
+        contexts.extend(
+            [
+                _pmca_libusb.MscContext(),
+                _pmca_libusb.MtpContext(),
+                _pmca_libusb.VendorSpecificContext(),
+            ]
+        )
+        print("Using drivers " + ", ".join(c.name for c in contexts))
+        return UsbDriverList(*contexts)
+    return importDriver(None)
+
+
+def diagnose_sony_usb_state() -> str:
+    """Inspect raw USB devices (VID 0x054c) to pinpoint driver/mode issues."""
+    try:
+        import usb.core
+
+        devs = list(usb.core.find(find_all=True, idVendor=SONY_ID_VENDOR) or ())
+    except Exception as exc:
+        return (
+            f"无法扫描 libusb 设备 ({exc})。"
+            + (
+                "Windows 请用 Zadig 安装 libusb-win32/libusbK。"
+                if sys.platform == "win32"
+                else ("macOS 请确认已执行 `brew install libusb`。" if sys.platform == "darwin" else "请安装 libusb-1.0-0 并检查权限。")
+            )
+        )
+
+    if not devs:
+        return (
+            "USB 总线上未发现 Sony (0x054c) 设备：请确认相机已开机、使用带数据传输能力的 USB 线直连电脑，"
+            "且相机 MENU -> 设置 -> USB连接 设为「大容量存储 (Mass Storage)」。"
+        )
+
+    lines = []
+    saw_senser = False
+    saw_mtp = False
+    saw_msc = False
+    for d in devs:
+        pid = int(getattr(d, "idProduct", 0))
+        classes = []
+        try:
+            for cfg in d:
+                for intf in cfg:
+                    classes.append(intf.bInterfaceClass)
+        except Exception:
+            pass
+        if pid in SONY_ID_PRODUCT_SENSER or 0xFF in classes:
+            saw_senser = True
+        if 0x06 in classes:
+            saw_mtp = True
+        if 0x08 in classes:
+            saw_msc = True
+        cls_str = ",".join(f"0x{c:02x}" for c in sorted(set(classes))) or "unknown"
+        lines.append(f"0x{SONY_ID_VENDOR:04x}:0x{pid:04x} (class={cls_str})")
+
+    hints = []
+    if saw_senser:
+        if sys.platform == "win32":
+            hints.append(
+                "相机已处于 Service Mode，但 Windows 未能在该 PID 上打开 libusb！"
+                "请保持相机连接，打开 Zadig -> Options -> List All Devices -> "
+                "找到新出现的 Sony 设备（PID 0336/02A9），安装 `libusb-win32` 驱动后重试。"
+            )
+        elif sys.platform == "darwin":
+            hints.append(
+                "相机已处于 Service Mode，但 macOS 无法打开该接口（请确认 `brew install libusb` 且无权限/驱动占用问题）。"
+            )
+        else:
+            hints.append(
+                "相机已处于 Service Mode，但 Linux 无权限或被占用（请配置 054c udev 规则或用 sudo 重试）。"
+            )
+    elif saw_mtp:
+        hints.append(
+            "相机当前处于 MTP / PTP 模式（class=0x06）：请在相机 MENU -> 设置 -> USB连接 中改为「大容量存储 (Mass Storage)」。"
+        )
+    elif saw_msc:
+        if sys.platform == "win32":
+            hints.append(
+                "相机处于 MSC 模式但切换失败：请尝试用 Zadig 为 Sony Mass Storage 绑定 `libusb-win32`，并确认相机未处于回放/菜单忙碌状态或更换 USB 直连口。"
+            )
+        elif sys.platform == "darwin":
+            hints.append(
+                "相机处于 MSC 模式但 macOS 系统驱动正占用磁盘（macOS 下 libusb 通常无法直接抢占已挂载的 MSC）："
+                "请尝试先弹出/卸载相机磁盘卷 (`diskutil unmountDisk ...`)、安装 Sony 官方 PMCA DriverLoader kext，或避免使用转接 Hub。"
+            )
+        else:
+            hints.append(
+                "相机处于 MSC 模式但切换失败：请确认未被系统挂载占用（可先 umount），并检查 udev 规则或使用 sudo。"
+            )
+    return f"USB 总线检测到: {', '.join(lines)}。" + (" ".join(hints) if hints else "")
+
+
 def ensure_service_terminal(driver, force: bool = False):
     require_usb_runtime()
-    dev = getDevice(driver)
+    try:
+        dev = getDevice(driver)
+    except Exception as exc:
+        raise RuntimeError(f"枚举 Sony 设备失败 ({exc})\nUSB 诊断: {diagnose_sony_usb_state()}") from exc
     if not dev:
-        raise RuntimeError("No Sony device found")
+        raise RuntimeError(f"No Sony device found\nUSB 诊断: {diagnose_sony_usb_state()}")
+
+    if isinstance(dev, SonyMtpExtCmdDevice):
+        raise RuntimeError(
+            "检测到相机当前处于 MTP 模式，无法直接进入 Service Mode。\n"
+            "请在相机 MENU -> 设置(黄箱子) -> USB连接 设为「大容量存储 (Mass Storage)」后重试。"
+        )
 
     if isinstance(dev, SonySenserDevice):
         try:
@@ -198,21 +320,30 @@ def ensure_service_terminal(driver, force: bool = False):
             return dev
 
     if isinstance(dev, SonyMscExtCmdDevice):
-        auth = SonySenserAuthDevice(dev.driver)
-        auth.start()
-        auth.authenticate()
+        try:
+            auth = SonySenserAuthDevice(dev.driver)
+            auth.start()
+            auth.authenticate()
+        except Exception as exc:
+            raise RuntimeError(
+                f"向相机发送 Service Mode 认证握手失败 ({exc})\nUSB 诊断: {diagnose_sony_usb_state()}"
+            ) from exc
+
         senser_dev = None
-        for _ in range(30):
+        for _ in range(50):
             time.sleep(0.5)
             try:
-                devices = list(listDevices(driver, True))
-                if len(devices) == 1 and isinstance(devices[0], SonySenserDevice):
+                devices = [d for d in listDevices(driver, True) if isinstance(d, SonySenserDevice)]
+                if len(devices) == 1:
                     senser_dev = devices[0]
                     break
             except Exception:
                 pass
         if not senser_dev:
-            raise RuntimeError("Timed out waiting for Service Mode")
+            raise RuntimeError(
+                "Timed out waiting for Service Mode (25s)\n"
+                f"USB 诊断: {diagnose_sony_usb_state()}"
+            )
         senser_auth = SonySenserAuthDevice(senser_dev.driver)
         senser_auth.start()
         senser_auth.authenticate()
@@ -224,7 +355,7 @@ def ensure_service_terminal(driver, force: bool = False):
         check_camera_model(senser_dev, force=force)
         return senser_dev
 
-    raise RuntimeError(f"Unsupported Sony device state: {type(dev).__name__}")
+    raise RuntimeError(f"Unsupported Sony device state: {type(dev).__name__}\nUSB 诊断: {diagnose_sony_usb_state()}")
 
 
 def upload_tmpbt(backend, sh, remote_path: str, data: bytes, executable: bool = False) -> None:
@@ -439,7 +570,7 @@ def main() -> int:
     if args.action == "deploy":
         validate_arm32_shared_elf(args.so)
 
-    with importDriver("libusb") as driver:
+    with open_usb_drivers() as driver:
         dev = ensure_service_terminal(driver, force=args.force)
         backend = SenserPlatformBackend(SonySenserCamera(dev))
         sh = lambda cmd, timeout=15: shell_command(dev, cmd, timeout=timeout)

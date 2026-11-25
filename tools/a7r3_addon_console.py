@@ -25,7 +25,7 @@ from deploy_ram import (  # noqa: E402
     cmd_deploy,
     ensure_service_terminal,
     get_verified_im_pid,
-    importDriver,
+    open_usb_drivers,
     read_camera_file_verified,
     require_usb_runtime,
     shell_command,
@@ -87,7 +87,7 @@ def validate_so_path(so_path: Path) -> None:
 
 def open_service_session(force: bool = False):
     require_usb_runtime()
-    driver_ctx = importDriver("libusb")
+    driver_ctx = open_usb_drivers()
     driver = driver_ctx.__enter__()
     try:
         dev = ensure_service_terminal(driver, force=force)
@@ -187,6 +187,8 @@ def format_error(exc: Exception) -> str:
             "[!!] 致命加载错误 (DL_RC_25): dlopen 失败。\n"
             "     禁止在同一开机周期内重试！请先关闭相机电源（或重启相机）后再重新部署。"
         )
+    if "usb 诊断:" in low or "usb连接" in low:
+        return f"[!] {msg}"
     if "no sony device found" in low:
         return "[!] 未检测到 Sony 相机：请确认相机已开机、USB 线已连接且处于大容量存储 (MSC) 或服务模式。"
     if "timed out waiting for service mode" in low or "timeout" in low or "libusb" in low:

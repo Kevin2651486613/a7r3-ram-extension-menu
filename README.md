@@ -150,6 +150,7 @@ python tools/a7r3_addon_console.py quit     # 安全卸载并还原全部原生�
 | `未找到完整 LLVM` / macOS 缺 `ld.lld` | 未装完整 LLVM 或误用了 Xcode `/usr/bin/clang` 桩 | Windows 填 `.env.local` 的 `A7R3_LLVM_BIN`；macOS 执行 `brew install llvm` |
 | `未找到 A7R3 v3.10 系统库` | 未配置 `A7R3_FW_LIB_DIR` 且 `./firmware/lib/` 为空 | 连上相机跑一次 `python tools/a7r3_addon_console.py init-camera` |
 | `未检测到 libusb 原生驱动` / `No backend` / `Access denied` | Windows 未装 Zadig 驱动，或 macOS/Linux 缺 libusb/USB 权限 | Windows 用 Zadig 绑 `libusb-win32`/`libusbK`；macOS `brew install libusb`；Linux 配 `udev` 或 `sudo` |
+| **无法切换到服务模式** (`Timed out waiting for Service Mode` / `MTP`) | 1) 相机停留在 **MTP/PC遥控** 而非 **大容量存储 (MSC)**；<br>2) **Windows 常见**：MSC 切到 Service Mode 后变成了新 VID:PID（`054c:0336` 或 `02a9`），需单独绑驱动；<br>3) **macOS/Linux**：系统驱动占用了 MSC 磁盘 | 1) 相机 `MENU -> 设置 -> USB连接` 改 **大容量存储**；<br>2) **Windows**：切出超时此刻保持插线，打开 Zadig → `Options` 勾选 `List All Devices`，找到新增的 `PID 0336/02A9` 安装 **`libusb-win32`**；<br>3) **macOS**：`diskutil unmountDisk` 弹出自动挂载卷或装 Sony PMCA DriverLoader kext（工具链现已支持原生 MSC 驱动通道）；<br>4) 换机身直连数据线避免经过劣质 USB Hub |
 | `Sony-PMCA-RE` (`pmca`) 缺失 | 未克隆上游 `pmca` 库 | `git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE` |
 | 菜单里「水平仪与直方图同显」**灰色不可选** | 编译时未生成 `src/a7r3_dual_hud_payload.local.h`（安全透传模式） | 运行 `python tools/a7r3_addon_console.py gen-payload --from-camera` 后再 `update` |
 

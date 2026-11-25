@@ -212,14 +212,14 @@ def pull_uxc_from_camera(force: bool = False) -> bytes:
         SenserPlatformBackend,
         SonySenserCamera,
         ensure_service_terminal,
-        importDriver,
+        open_usb_drivers,
         read_camera_file_verified,
         require_usb_runtime,
     )
     from ram_loader.terminal_shell import shell_command
 
     require_usb_runtime()
-    with importDriver("libusb") as driver:
+    with open_usb_drivers() as driver:
         dev = ensure_service_terminal(driver, force=force)
         backend = SenserPlatformBackend(SonySenserCamera(dev))
         sh = lambda cmd, timeout=15: shell_command(dev, cmd, timeout=timeout)
