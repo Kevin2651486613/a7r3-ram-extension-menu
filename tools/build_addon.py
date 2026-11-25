@@ -36,8 +36,15 @@ CORE_SRCS = [
 def resolve_llvm_bin(cli_val: Path | None) -> Path | None:
     if cli_val is not None:
         return cli_val
-    if env_val := os.environ.get("A7R3_LLVM_BIN"):
+    if env_val := os.environ.get("A7R3_LLVM_BIN", "").strip():
         return Path(env_val)
+    if lld_in_path := shutil.which("ld.lld"):
+        cand = Path(lld_in_path).resolve().parent
+        if (cand / "clang").exists() or (cand / "clang.exe").exists():
+            return cand
+    for brew_dir in (Path("/opt/homebrew/opt/llvm/bin"), Path("/usr/local/opt/llvm/bin")):
+        if (brew_dir / "clang").is_file() and (brew_dir / "ld.lld").is_file():
+            return brew_dir
     if clang_in_path := shutil.which("clang"):
         return Path(clang_in_path).resolve().parent
     return None

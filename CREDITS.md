@@ -9,11 +9,12 @@
 | 组件 | 协议 | 用途 |
 | --- | --- | --- |
 | [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) (`pmca` / `libusb`) | MIT | USB Service Mode 握手、终端认证与 `/tmp_bt` 文件读写通道 |
-| [Bigrabbit057/sony-a7r3-creative-studio](https://github.com/Bigrabbit057/sony-a7r3-creative-studio) (`terminal_shell`、`build_mem_writer`、`build_show_hex` 等辅助模块) | GPLv3 | 外部运行时注入辅助脚本与 A7R3 技术资料参考（**未打包进本仓库**） |
 | [LLVM / Clang + LLD](https://llvm.org/) (`clang` / `ld.lld` / `llvm-readelf`) | Apache-2.0 with LLVM-exception | 交叉编译 ARMv7-A freestanding `.so` 与远程注入 ELF |
-| [Keystone Engine](https://www.keystone-engine.org/) (`keystone-engine`) | GPLv2 | 为远程 `dlopen` 跳板生成 ARM 机器码（`tools/ram_loader/build_ram_tools.py`） |
+| [Keystone Engine](https://www.keystone-engine.org/) (`keystone-engine`) | GPLv2 | 在宿主机端汇编远程 ARM ELF 工具（`tools/ram_loader/`，构建产物与注入流程独立于上游工具许可） |
 | [Pillow](https://python-pillow.org/) | HPND | `tools/gen_md3_assets.py` 光栅化生成 4-bit 抗锯齿中文字模头文件 |
 | [FFmpeg](https://ffmpeg.org/) | LGPL / GPL | 将外部音频批量转换为机内支持的 24 kHz 单声道 16-bit PCM `.wav` |
+
+> 注：纯 RAM 注入所需的 `tools/ram_loader/terminal_shell.py`、`build_mem_writer.py`、`build_show_hex.py` 已采用清洁室方式基于 MIT 协议从零重写并直接内置于本仓库（仅调用 MIT 许可的 `Sony-PMCA-RE` 终端收发接口与 Linux 标准系统调用）。
 
 ## 2. 公开逆向研究参考
 

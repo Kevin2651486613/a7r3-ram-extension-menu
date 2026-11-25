@@ -24,14 +24,26 @@ PMCA_DIR_ENV = os.environ.get("A7R3_PMCA_DIR", "").strip()
 HUD_DIR = Path(HUD_DIR_ENV) if HUD_DIR_ENV else None
 
 for _extra in (
-    TOOLS_DIR / "ram_loader",
+    TOOLS_DIR,
     Path(PMCA_DIR_ENV) if PMCA_DIR_ENV else None,
+    SDK_DIR / "vendor" / "Sony-PMCA-RE",
+    SDK_DIR / "Sony-PMCA-RE",
+    SDK_DIR.parent / "Sony-PMCA-RE",
     (HUD_DIR / "vendor").resolve() if HUD_DIR else None,
-    (HUD_DIR / "scratch/precapture/python_deps").resolve() if HUD_DIR else None,
-    HUD_DIR.resolve() if HUD_DIR else None,
 ):
     if _extra is not None and _extra.exists() and str(_extra) not in sys.path:
         sys.path.insert(0, str(_extra))
+
+_HELPER_IMPORT_ERR: Exception | None = None
+try:
+    from ram_loader.build_mem_writer import build_mem_writer_elf
+    from ram_loader.build_show_hex import build_show_hex_elf
+    from ram_loader.terminal_shell import shell_command
+except Exception as exc:  # pragma: no cover
+    _HELPER_IMPORT_ERR = exc
+    build_mem_writer_elf = None  # type: ignore[assignment]
+    build_show_hex_elf = None  # type: ignore[assignment]
+    shell_command = None  # type: ignore[assignment]
 
 _USB_IMPORT_ERR: Exception | None = None
 try:
@@ -43,9 +55,6 @@ try:
         SonySenserCamera,
         SonySenserDevice,
     )
-    from build_mem_writer import build_mem_writer_elf
-    from build_show_hex import build_show_hex_elf
-    from terminal_shell import shell_command
 
     # Never drop USB controller on exit.
     SonySenserAuthDevice.stop = lambda self: None
@@ -59,9 +68,6 @@ except Exception as exc:  # pragma: no cover - deferred until USB actions run
     SonySenserAuthDevice = None  # type: ignore[assignment]
     SonySenserCamera = None  # type: ignore[assignment]
     SonySenserDevice = None  # type: ignore[assignment]
-    build_mem_writer_elf = None  # type: ignore[assignment]
-    build_show_hex_elf = None  # type: ignore[assignment]
-    shell_command = None  # type: ignore[assignment]
 
 LIBC_SVC_OFF = 0x00024F78
 LIBDL_DLOPEN_OFF = 0x00000BC9
@@ -82,10 +88,15 @@ REQUIRED_IM_LIBS = (
 
 
 def require_usb_runtime() -> None:
+    if _HELPER_IMPORT_ERR is not None:
+        raise RuntimeError(
+            f"内置纯 RAM 注入助手加载失败 ({_HELPER_IMPORT_ERR})。"
+            "请确认已安装依赖: `pip install -r requirements.txt`。"
+        )
     if _USB_IMPORT_ERR is not None:
         raise RuntimeError(
-            f"缺少外部 USB 通信/注入依赖 ({_USB_IMPORT_ERR})。"
-            "请参考 .env.example 与 docs/TOOLS_AND_BUILD.md 配置 A7R3_HUD_DIR / A7R3_PMCA_DIR。"
+            f"缺少外部 Sony-PMCA-RE (`pmca`) 或 libusb/pyusb 依赖 ({_USB_IMPORT_ERR})。"
+            "请先安装 `pip install -r requirements.txt`，并克隆 https://github.com/ma1co/Sony-PMCA-RE 后在 .env.local 配置 A7R3_PMCA_DIR。"
         )
 
 
@@ -333,7 +344,7 @@ def cmd_deploy(backend, sh, so_path: Path, open_now: bool, force: bool = False) 
         build_show_hex_elf(source_path=f"/proc/{pid}/mem", max_bytes=256),
         executable=True,
     )
-    upload_tmpbt(backend, sh, writer, build_mem_writer_elf(), executable=True)
+    upload_tmpbt(backend, sh, writer, build_mem_writer_elf(pid=pid), executable=True)
     svc_addr = libc_base + LIBC_SVC_OFF
 
     sh("rm -f /tmp_bt/addon_quit /tmp_bt/addon_off; : > /tmp_bt/addon_arm")

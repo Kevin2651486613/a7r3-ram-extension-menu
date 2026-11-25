@@ -24,6 +24,12 @@ HUD_DIR = Path(HUD_DIR_ENV) if HUD_DIR_ENV else None
 
 if env_llvm := os.environ.get("A7R3_LLVM_BIN", "").strip():
     LLVM_BIN = Path(env_llvm)
+elif _lld_in_path := shutil.which("ld.lld"):
+    LLVM_BIN = Path(_lld_in_path).resolve().parent
+elif (Path("/opt/homebrew/opt/llvm/bin") / "ld.lld").is_file():
+    LLVM_BIN = Path("/opt/homebrew/opt/llvm/bin")
+elif (Path("/usr/local/opt/llvm/bin") / "ld.lld").is_file():
+    LLVM_BIN = Path("/usr/local/opt/llvm/bin")
 else:
     _clang_in_path = shutil.which("clang")
     LLVM_BIN = Path(_clang_in_path).resolve().parent if _clang_in_path else Path()
@@ -40,21 +46,15 @@ try:
 except ImportError as exc:
     raise ImportError(
         "Missing Python package 'keystone-engine' (keystone). "
-        "Install with `pip install keystone-engine` or set A7R3_HUD_DIR in .env.local."
+        "Install with `pip install -r requirements.txt`."
     ) from exc
 
-ENTRY = 0x10100
+try:
+    from ram_loader import DEFAULT_ENTRY as ENTRY, wrap_arm_elf as _wrap_arm_elf
+except ImportError:
+    from __init__ import DEFAULT_ENTRY as ENTRY, wrap_arm_elf as _wrap_arm_elf  # type: ignore[no-redef]
+
 PAGE = 4096
-
-
-def _wrap_arm_elf(code: bytes, entry: int = ENTRY) -> bytes:
-    header = bytearray(256)
-    header[:7] = b"\x7fELF\x01\x01\x01"
-    struct.pack_into(
-        "<HHIIIIIHHHHHH", header, 16, 2, 40, 1, entry, 52, 0, 0x5000000, 52, 32, 1, 0, 0, 0
-    )
-    struct.pack_into("<8I", header, 52, 1, 256, entry, entry, len(code), len(code), 7, 4096)
-    return bytes(header) + code
 
 
 def build_fb_probe_elf(out_dir: Path) -> Path:

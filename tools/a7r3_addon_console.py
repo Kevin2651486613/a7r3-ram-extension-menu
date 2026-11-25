@@ -200,9 +200,24 @@ def action_check(so_path: Path) -> int:
     print(f"  [{'OK' if env_local.is_file() else 'INFO'}] 本地环境配置 .env.local: {'已加载' if env_local.is_file() else '未创建 (将使用系统环境变量)'}")
 
     llvm_env = os.environ.get("A7R3_LLVM_BIN", "").strip()
-    llvm_dir = Path(llvm_env) if llvm_env else (Path(shutil.which("clang")).resolve().parent if shutil.which("clang") else None)
-    llvm_ok = bool(llvm_dir and (llvm_dir / "clang.exe" if (llvm_dir / "clang.exe").exists() else llvm_dir / "clang").is_file())
-    print(f"  [{'OK' if llvm_ok else 'WARN'}] LLVM 工具链 (clang): {llvm_dir if llvm_ok else '未找到，请配置 A7R3_LLVM_BIN'}")
+    llvm_dir: Path | None = Path(llvm_env) if llvm_env else None
+    if llvm_dir is None:
+        if lld_p := shutil.which("ld.lld"):
+            llvm_dir = Path(lld_p).resolve().parent
+        else:
+            for brew_dir in (Path("/opt/homebrew/opt/llvm/bin"), Path("/usr/local/opt/llvm/bin")):
+                if (brew_dir / "clang").is_file() and (brew_dir / "ld.lld").is_file():
+                    llvm_dir = brew_dir
+                    break
+            if llvm_dir is None and (clang_p := shutil.which("clang")):
+                llvm_dir = Path(clang_p).resolve().parent
+    clang_name = "clang.exe" if llvm_dir and (llvm_dir / "clang.exe").exists() else "clang"
+    lld_name = "ld.lld.exe" if llvm_dir and (llvm_dir / "ld.lld.exe").exists() else "ld.lld"
+    llvm_ok = bool(llvm_dir and (llvm_dir / clang_name).is_file() and (llvm_dir / lld_name).is_file())
+    print(
+        f"  [{'OK' if llvm_ok else 'WARN'}] LLVM 工具链 (clang + ld.lld): "
+        f"{llvm_dir if llvm_ok else '未找到完整 LLVM (macOS 请 brew install llvm 或配置 A7R3_LLVM_BIN)'}"
+    )
 
     fw_env = os.environ.get("A7R3_FW_LIB_DIR", "").strip()
     fw_ok = bool(
@@ -213,9 +228,25 @@ def action_check(so_path: Path) -> int:
     )
     print(f"  [{'OK' if fw_ok else 'WARN'}] A7R3 v3.10 系统库 (/lib): {fw_env if fw_ok else '未找到，请配置 A7R3_FW_LIB_DIR'}")
 
-    for pkg, desc in (("PIL", "Pillow 字模生成"), ("keystone", "Keystone ARM 汇编"), ("pmca", "Sony-PMCA-RE USB 通信")):
+    for pkg, desc in (
+        ("PIL", "Pillow 字模生成"),
+        ("keystone", "Keystone ARM 汇编"),
+        ("usb", "PyUSB / libusb 驱动"),
+        ("pmca", "Sony-PMCA-RE (A7R3_PMCA_DIR)"),
+    ):
         found = importlib.util.find_spec(pkg) is not None
         print(f"  [{'OK' if found else 'WARN'}] Python 包 {pkg} ({desc}): {'已就绪' if found else '未检测到'}")
+
+    try:
+        from ram_loader.terminal_shell import shell_command as _sc  # noqa: F401
+        from ram_loader.build_mem_writer import build_mem_writer_elf as _mw  # noqa: F401
+        from ram_loader.build_show_hex import build_show_hex_elf as _sh  # noqa: F401
+        helpers_ok = True
+        helpers_msg = "已内置 (MIT)"
+    except Exception as exc:
+        helpers_ok = False
+        helpers_msg = f"加载失败 ({exc})"
+    print(f"  [{'OK' if helpers_ok else 'WARN'}] 内置注入助手 (terminal_shell / mem_writer / show_hex): {helpers_msg}")
 
     local_payload = SDK_DIR / "src" / "a7r3_dual_hud_payload.local.h"
     print(f"  [INFO] 可选本地 Dual-HUD 载荷: {'已配置 (.local.h)' if local_payload.is_file() else '未配置 (纯透传构建)'}")

@@ -67,7 +67,11 @@ a7r3-ram-extension-menu/
 │   ├── build_addon.py                 # freestanding 编译、自动生成字模与 ELF 严格校验
 │   ├── deploy_ram.py                  # 带多重边界校验的纯 RAM (/tmp_bt) 注入器
 │   ├── gen_md3_assets.py              # 从本机系统字体实时生成 4-bit 中文点阵头文件
-│   └── ram_loader/build_ram_tools.py  # 远程 SVC 与 ARM dlopen 跳板生成器
+│   └── ram_loader/                    # 纯 RAM 注入助手（全内置 MIT 实现）
+│       ├── build_ram_tools.py         # 远程 SVC 与 ARM dlopen 跳板生成器
+│       ├── terminal_shell.py          # USB Service Terminal BusyBox 命令收发器
+│       ├── build_mem_writer.py        # /proc/<pid>/mem 与 ptrace 双路径写入器
+│       └── build_show_hex.py          # 流式只读内存/文件十六进制读取器
 └── docs/
     ├── ARCHITECTURE.md                # 总体架构、纯 RAM 注入及各模块实现思路
     ├── FIRMWARE_OFFSETS_V310.md       # A7R3 v3.10 互操作性地址偏移与通信协议笔记
@@ -79,11 +83,20 @@ a7r3-ram-extension-menu/
 
 ## 快速开始
 
-### 1. 配置本地环境（仅本地生效，`.env.local` 已被 `.gitignore` 忽略）
+### 1. 安装依赖与配置环境（支持 Windows / macOS / Linux）
+
+```bash
+pip install -r requirements.txt
+git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
+# macOS 还需安装 LLVM 与 libusb: brew install llvm libusb
+```
+
+复制 `.env.example` 为 `.env.local`（已被 `.gitignore` 忽略）并填写路径：
 
 ```powershell
 copy .env.example .env.local
-# 编辑 .env.local，填写你本机的 LLVM、自行合法提取的 A7R3 /lib 以及外部 PMCA 助手目录
+# 填写 A7R3_LLVM_BIN、合法提取的 A7R3 v3.10 /lib（含 libc/libdl/libpthread 2.11.2），
+# 以及 A7R3_PMCA_DIR（若放在 ./Sony-PMCA-RE 或 ../Sony-PMCA-RE 可自动识别）
 ```
 
 运行离线边界与依赖自检：

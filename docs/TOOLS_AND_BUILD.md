@@ -9,30 +9,53 @@
 | 类别 | 工具名称 | 用途说明 |
 | --- | --- | --- |
 | 交叉编译 & 链接 | **LLVM/Clang 18.1.8 + LLD** (`clang`, `ld.lld`, `llvm-readelf`, `llvm-objdump`, `llvm-nm`) | 编译 freestanding ARMv7-A `.so` 与无 libc 静态助手 ELF，并进行 ELF 符号/重定位段自动化检查 |
-| 脚本与控制台 | **Python 3.10+** | 运行编译脚本、字模生成器、纯 RAM 注入器及交互式控制台 |
-| 中文点阵生成 | **Pillow** (`PIL`) + 微软雅黑 (`msyhbd.ttc` / `msyh.ttc`) | `tools/gen_md3_assets.py` 生成 4-bit 抗锯齿中文标签表 `src/md3_demo_labels.h` |
-| 远程跳板汇编 | **Keystone Engine** (`keystone-engine`) | `tools/ram_loader/build_ram_tools.py` 动态汇编 ARM `dlopen` 跳板字节码 |
-| USB 通信层 | **Sony-PMCA-RE (`pmca` + `libusb`)** + 运行时辅助脚本 (`terminal_shell`, `build_mem_writer`, `build_show_hex`) | 通过 USB Service Mode 与相机建立交互式 BusyBox Shell 并安全传输文件至 `/tmp_bt` |
+| 脚本与控制台 | **Python 3.10+** | 运行编译脚本、字模生成器、纯 RAM 注入器及交互式控制台（依赖见根目录 [requirements.txt](../requirements.txt)） |
+| 中文点阵生成 | **Pillow** (`PIL`) + 系统字体 | `tools/gen_md3_assets.py` 生成 4-bit 抗锯齿中文标签表 `src/md3_demo_labels.h`（Windows/macOS/Linux 自动探测） |
+| 远程注入与跳板 | **Keystone Engine** (`keystone-engine`) + **内置 MIT `tools/ram_loader/`** | 自包含生成 ARM `dlopen` 跳板、`/proc/<pid>/mem` (`ptrace` 自动回退) 写入器、流式十六进制读取器与终端命令封装 |
+| USB 通信层 | **[ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE)** (`pmca` + `pyusb` / `libusb`) | 通过 USB Service Mode 与相机建立 BusyBox 终端并传输文件至 `/tmp_bt` |
 | 音频转码 | **FFmpeg** (`ffmpeg`) | 将任意音乐/快门声转为机内兼容的 24 kHz 单声道 16-bit 未压缩 PCM `.wav` |
 | Windows 启动器 | [`启动拓展菜单工具.bat`](../启动拓展菜单工具.bat) | 自动检测 `python` / `py -3` 并以 UTF-8 启动控制台工具 |
 
 ---
 
-## 2. 环境变量与 `.env.local` 配置
+## 2. 安装依赖与 `.env.local` 配置（Windows / macOS / Linux）
+
+### 2.1 安装 Python 与系统工具
+
+```bash
+# 1. 安装 Python 依赖
+pip install -r requirements.txt
+
+# 2. 获取 MIT 协议的 Sony-PMCA-RE（支持 A7R3_PMCA_DIR 或同级目录自动识别）
+git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
+```
+
+- **macOS (Apple Silicon / Intel)**：
+  ```bash
+  brew install llvm libusb ffmpeg
+  # Apple Silicon LLVM 常见路径: /opt/homebrew/opt/llvm/bin
+  # Intel Mac LLVM 常见路径:     /usr/local/opt/llvm/bin
+  ```
+- **Linux (Ubuntu / Debian)**：
+  ```bash
+  sudo apt install clang lld llvm libusb-1.0-0 ffmpeg
+  ```
+- **Windows**：安装 LLVM 官方预编译包（含 `clang`、`ld.lld`、`llvm-readelf`）及 WinUSB/libusb-K 驱动（`Sony-PMCA-RE` 连接相机需要）。
+
+### 2.2 配置 `.env.local`
 
 本仓库**不包含任何本机绝对路径或原厂系统库文件**。`tools/` 下的脚本统一通过 `tools/env_config.py` 读取仓库根目录的 `.env.local`（已被 `.gitignore` 忽略），也可直接读取系统环境变量或命令行参数：
 
-```powershell
-copy .env.example .env.local
+```bash
+cp .env.example .env.local
 ```
 
 | 环境变量 | 示例值 | 说明 |
 | --- | --- | --- |
-| `A7R3_LLVM_BIN` | `/path/to/llvm/bin` | 包含 `clang`、`ld.lld`、`llvm-readelf` 的目录（未设置时自动查找 `PATH` 中的 `clang`） |
-| `A7R3_FW_LIB_DIR` | `/path/to/your/a7r3_v310_extraction/lib` | 用户自行从合法持有的设备/固件中本地提取的 `/lib`（需含 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so`） |
-| `A7R3_HUD_DIR` | `/path/to/your/pmca_runtime_helpers` | 外部 runtime 辅助仓库目录（提供 `pmca`、`terminal_shell`、`build_mem_writer`、`build_show_hex` 等） |
-| `A7R3_PMCA_DIR` | 可选 | 若单独安装了 `Sony-PMCA-RE`，可指定其根目录 |
-| `A7R3_FONT_BOLD` / `A7R3_FONT_REG` | `C:\Windows\Fonts\msyhbd.ttc` | 重新生成中文点阵字模时使用的字体文件（未设置时自动探测系统常见中文字体） |
+| `A7R3_LLVM_BIN` | `/opt/homebrew/opt/llvm/bin` | 包含 `clang`、`ld.lld`、`llvm-readelf` 的目录（未设置时自动查找 `PATH` 中的 `clang`） |
+| `A7R3_FW_LIB_DIR` | `/path/to/your/a7r3_v310_extraction/lib` | 用户自行从合法持有的设备/固件中本地提取的 `/lib`（仅编译 `.so` 时需要 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so`） |
+| `A7R3_PMCA_DIR` | `/path/to/Sony-PMCA-RE` | 若已克隆至 `./Sony-PMCA-RE` 或 `../Sony-PMCA-RE`，或通过 pip 安装，可留空自动识别 |
+| `A7R3_FONT_BOLD` / `A7R3_FONT_REG` | `/System/Library/Fonts/PingFang.ttc` | 仅重新生成 MD3 中文点阵字模时使用（Route A1 原生第 7 大类不需要此项） |
 
 ---
 
