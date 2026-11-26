@@ -80,7 +80,7 @@ a7r3-ram-extension-menu/
 Bug 反馈必须提供：
 
 - 相机型号与固件版本（以及是否为官方 v3.10）；
-- 主机操作系统、Python 版本、LLVM 版本、`Sony-PMCA-RE` 来源；
+- 主机操作系统、Python 版本、LLVM 版本、`pmca` 来源（内置 `tools/vendor/pmca/` 或自定义 `A7R3_PMCA_DIR`）；
 - USB 驱动情况（Windows：`python tools/win_usb_driver.py status` 输出，如原生 `USBSTOR` / 临时 `libusb0`；Linux：`udev`；macOS：libusb）；
 - `python tools/a7r3_addon_console.py check` 的完整输出；
 - 脱敏后的 `/tmp_bt/addon.log` 相关片段（`python tools/a7r3_addon_console.py status`）；

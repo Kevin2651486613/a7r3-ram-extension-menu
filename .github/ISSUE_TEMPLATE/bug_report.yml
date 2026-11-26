@@ -31,7 +31,7 @@ body:
     id: host
     attributes:
       label: 主机环境
-      description: 操作系统、Python 版本、LLVM 版本、Sony-PMCA-RE 来源、USB 驱动（Windows 可附 `python tools/win_usb_driver.py status`，Linux udev，macOS libusb）
+      description: 操作系统、Python 版本、LLVM 版本、pmca 来源（默认内置或 A7R3_PMCA_DIR）、USB 驱动（Windows 可附 `python tools/win_usb_driver.py status`，Linux udev，macOS libusb）
     validations:
       required: true
   - type: textarea

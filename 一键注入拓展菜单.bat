@@ -22,6 +22,18 @@ if not defined PY (
     exit /b 1
 )
 
+"%PY%" -c "import importlib.util, sys; ok = all(importlib.util.find_spec(m) for m in ('keystone', 'usb')) and bool(importlib.util.find_spec('Cryptodome') or importlib.util.find_spec('Crypto')); sys.exit(0 if ok else 1)" >nul 2>nul
+if errorlevel 1 (
+    echo [*] Missing Python packages detected. Installing requirements.txt...
+    "%PY%" -m pip install -r "%~dp0requirements.txt"
+    if errorlevel 1 (
+        echo [!] Failed to install Python dependencies from requirements.txt.
+        echo     Please check your network connection or run: pip install -r requirements.txt
+        pause
+        exit /b 1
+    )
+)
+
 "%PY%" "%~dp0tools\a7r3_addon_console.py" one-click %*
 set "RC=%errorlevel%"
 echo.

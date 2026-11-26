@@ -23,8 +23,8 @@
 ## 预编译下载（普通用户免装 LLVM / 免手动 Zadig）
 
 > [!IMPORTANT]
-> **普通体验用户不需要安装 LLVM 编译器，也不需要手动打开 Zadig 安装或卸载驱动！**
-> 直接下载下方 Release 中的纯原创预编译 `demo_native_tab7_ram.so`，放到 `build\demo_native_tab7_ram.so` 后双击 **[一键注入拓展菜单.bat](一键注入拓展菜单.bat)** 即可全自动完成注入与驱动还原。
+> **普通体验用户不需要安装 LLVM，不需要手动配置 Zadig，也不需要手工下载 `.so`！**
+> 只要电脑装有 **Python 3.10+**，下载本仓库后**直接双击 [一键注入拓展菜单.bat](一键注入拓展菜单.bat)** 即可：若缺少 Python 依赖会自动 `pip install`，若缺少 `build\demo_native_tab7_ram.so` 会**自动从 GitHub Releases 拉取并校验 SHA-256**，再自动完成驱动切换、注入与还原。如网络受限需离线放置，也可手动下载下方预编译文件放入 `build\demo_native_tab7_ram.so`。
 
 | 项目 | 内容 |
 | --- | --- |
@@ -45,11 +45,11 @@
 | 第 1 页 | **水平仪与直方图同显** | 开关 | 在电子水平仪模式下同步叠显实时直方图（依赖运行时校验载荷，无载荷时自动置灰并安全透传） |
 | 第 1 页 | **相册显示焦点位置** | 开关 | 回放照片时自动解析 EXIF Sony MakerNote (`0x2027`) 并叠绘像素级无损对焦红框；兼容连拍组、`DISP`、放大与 `MENU` 退让，支持三缓冲采样并在删除等原生弹窗期间自动抑制防遮挡 |
 | 第 1 页 | **菜单触摸控制** | 开关 | 为原生按键式菜单注入纯内存触摸控制：支持 7 大类点击直达、标题栏翻页、行项点击、二级滚动弹窗及白平衡左侧滚轮点选 |
-| 第 1 页 | **电子快门自定义音效** | 开关 | 在电子快门（静音拍摄）模式下通过机身扬声器 ADF 通道异步播放自定义快门音 |
+| 第 1 页 | **快门自定义音效** | 四模式选择 | 控制自定义快门音触发时机（`关闭` / `机械快门启用` / `电子快门启用` / `均启用`），通过机身扬声器 ADF 通道异步播放 |
 | 第 1 页 | **快门音效音量** | 三档选择 | 调节自定义快门音播放音量（`低` / `中` / `高`） |
-| 第 2 页 | **选择快门音效** | 列表选择 | 选择内置音效或 SD 卡 `/SHUTTER_SFX/` 目录下扫描到的 `.wav` 音效 |
+| 第 2 页 | **选择快门音效** | 列表选择 | 选择唯一内置测试音效（`内置测试音效`）或 SD 卡 `/SHUTTER_SFX/` 目录下扫描到的 `.wav` 音效 |
 | 第 2 页 | **试听当前快门音效** | 执行 | 立即通过机身扬声器试听当前选中的快门音效 |
-| 第 2 页 | **刷新SD卡音效列表** | 执行 | 重新扫描卡槽 1 / 卡槽 2 的 `/SHUTTER_SFX/` 目录下的 PCM `.wav` 文件 |
+| 第 2 页 | **刷新SD卡音效列表** | 执行 + 弹窗 | 重新扫描卡槽 1 / 卡槽 2（含 exFAT / FAT32）`/SHUTTER_SFX/` 目录下的 `.wav` 文件，并弹出扫描结果提示框 |
 | 第 2 页 | **恢复全部默认设置** | 执行 | 一键将拓展菜单内所有增强开关与音效选项恢复为默认关闭状态 |
 
 ### 模块与源码对应关系
@@ -69,35 +69,35 @@
 ### 方式一：普通体验用户（Windows 全自动一键注入 — 免装 LLVM、免手动 Zadig，已真机验证）
 
 > [!TIP]
-> 运行时双显载荷 `/tmp_bt/dual_hud_payload.bin` 已与插件 `.so` 完全解耦。普通体验用户只需把 **GitHub Releases** 提供的纯原创预编译 `demo_native_tab7_ram.so` 放入 `build\` 目录即可一键运行——**无需安装 LLVM 编译器**，也**无需手动运行 Zadig 安装或卸载驱动**。
+> 运行时双显载荷 `/tmp_bt/dual_hud_payload.bin` 已与插件 `.so` 完全解耦，且最小 MIT `pmca` 通信层已内置于 `tools/vendor/pmca/`。普通体验用户**无需安装 LLVM 编译器**、**无需克隆外部仓库**、**无需手动跑 Zadig**，连 `.so` 与 Python 依赖都会由一键脚本自动补齐。
 
-1. **安装 Python 依赖与 `Sony-PMCA-RE`（仅首次需要）**：
-   - 安装 **Python 3.10+**（Windows 安装时勾选 `Add Python to PATH`）。
-   - 在仓库根目录执行：
+1. **安装 Python 3.10+（仅首次需要）**：
+   - **Windows 一键命令行安装**（Win10 / Win11 打开 PowerShell 运行，装完后重新打开终端或直接双击 `.bat` 刷新环境变量）：
      ```powershell
-     pip install -r requirements.txt
-     git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
+     winget install Python.Python.3.12
      ```
-2. **放入预编译插件**：
-   - 从 **[GitHub Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)** 下载 [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so)，保存为 `build\demo_native_tab7_ram.so`。
-3. **设置相机并连线**：
+   - **官方安装包下载**：[Python for Windows 官方下载页](https://www.python.org/downloads/windows/)（其他系统见 [python.org/downloads](https://www.python.org/downloads/)；Windows 安装界面底部务必勾选 **`Add python.exe to PATH`**）。
+   - *（Python 依赖会由下一步的双击脚本自动补装，如需提前手动安装也可运行 `pip install -r requirements.txt`。）*
+2. **设置相机并连线**：
    - 将相机 `MENU -> 设置(黄箱子) -> USB连接` 设为 **大容量存储 (Mass Storage)**，通过数据线直连电脑并开机。
-4. **双击一键注入**：
-   - 双击根目录 **[一键注入拓展菜单.bat](一键注入拓展菜单.bat)**（或以管理员运行 `python tools/a7r3_addon_console.py one-click`）。
+3. **双击一键注入（全自动闭环）**：
+   - 直接双击根目录 **[一键注入拓展菜单.bat](一键注入拓展菜单.bat)**（或以管理员运行 `python tools/a7r3_addon_console.py one-click`）。
+   - *(仅离线环境需要提前手动从 **[GitHub Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)** 下载 [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so) 放入 `build\demo_native_tab7_ram.so`；联网状态下脚本会自动拉取并校验。)*
    - 脚本会自动完成全部闭环并已在真实 Windows 环境验证通过：
-     1. 自动请求 UAC 管理员权限；
-     2. 自动将内置驱动助手复制到临时目录（规避下载目录 / 工作区的 Low Mandatory Level 与 Mark-of-the-Web 限制），临时为 `054C:0BFF` 安装 `libusb-win32`；
-     3. 自动切入 Service Mode 并临时绑定 `054C:0336` / `02A9`；
-     4. 如本机尚无运行时双显载荷，自动从已连接相机只读提取 `viewStlrec.uxc`、校验 SHA-256 后生成并上传 `/tmp_bt/dual_hud_payload.bin`；
-     5. 纯 RAM 注入 `demo_native_tab7_ram.so` 到 `im.elf` 并校验 10 项原生钩子全部 `[OK]`；
-     6. **结束后自动卸载全部临时 `libusb-win32` 驱动包并通过 `pnputil` 扫描还原 Windows 原生 `USBSTOR`**。
+     1. 自动请求 UAC 管理员权限，并检测补装缺失的 3 个 Python 依赖（`keystone-engine`、`pyusb`、`pycryptodomex`）；
+     2. 若本地缺少 `build\demo_native_tab7_ram.so`，自动从 GitHub Releases 拉取最新版并严格校验文件大小、SHA-256 与 ARM32 ELF 格式；
+     3. 自动将内置驱动助手复制到临时目录（规避下载目录 / 工作区的 Low Mandatory Level 与 Mark-of-the-Web 限制），临时为 `054C:0BFF` 安装 `libusb-win32`；
+     4. 自动切入 Service Mode 并临时绑定 `054C:0336` / `02A9`；
+     5. 如本机尚无运行时双显载荷，自动从已连接相机只读提取 `viewStlrec.uxc`、校验 SHA-256 后生成并上传 `/tmp_bt/dual_hud_payload.bin`；
+     6. 纯 RAM 注入 `demo_native_tab7_ram.so` 到 `im.elf` 并校验 10 项原生钩子全部 `[OK]`；
+     7. **结束后自动卸载全部临时 `libusb-win32` 驱动包并通过 `pnputil` 扫描还原 Windows 原生 `USBSTOR`**。
    - 看到注入完成且原生驱动已恢复后即可安全拔线，在相机上按 `MENU` 体验第 7 大类「拓展菜单」。
 
 ---
 
 ### 方式二：开发者 / 从源码编译（Windows / macOS / Linux）
 
-1. **准备 Python 与 `Sony-PMCA-RE`**：同方式一第 1 步。
+1. **准备 Python 环境**：同方式一第 1 步（无需单独克隆 `Sony-PMCA-RE`）。
 2. **安装 LLVM 交叉编译工具链**（需包含 `clang`、`ld.lld`、`llvm-readelf`，版本 ≥ 16）：
    - **Windows**：一行命令安装，构建脚本会自动探测 `C:\Program Files\LLVM\bin`（无需再手动配置 `.env.local`）：
      ```powershell
@@ -115,8 +115,9 @@
 
      | 命令 | 作用 |
      | --- | --- |
-     | `one-click` | 自动驱动切换 → 按需提取运行时载荷 → 注入（优先用现有 `.so`，仅在有 LLVM 时自动编译缺失 `.so`）→ 全量还原驱动 |
+     | `one-click` | 缺包自动 `pip` → 缺 `.so` 自动拉取 Release → 自动换驱 → 按需提取载荷 → 注入 → 全量还原驱动 |
      | `one-click --rebuild` | 强制从源码重新编译 `.so` 并完成全自动注入与驱动还原 |
+     | `download-so` | 手动从 GitHub Releases 拉取最新版预编译 `demo_native_tab7_ram.so` 并校验 SHA-256 |
      | `init-camera` | 连机从相机只读拉取 `/lib` 三件套（MD5 校验）与运行时双显载荷 `.bin` |
      | `check` | 离线检查 Python 依赖、工具链、驱动助手状态、运行时载荷与 `.so` ELF 边界 |
      | `build` | 单独交叉编译生成 `build/demo_native_tab7_ram.so` |
@@ -180,6 +181,7 @@ a7r3-ram-extension-menu/
 │   ├── deploy_ram.py                  # 多重边界校验纯 RAM (/tmp_bt) 部署器
 │   ├── gen_dual_hud_payload.py        # 提取并校验 viewStlrec.uxc 生成运行时 dual_hud_payload.bin
 │   ├── gen_md3_assets.py              # （归档）仅 legacy MD3 使用
+│   ├── vendor/pmca/                   # 内置精简版 USB/Senser 通信层（ma1co/Sony-PMCA-RE, MIT）
 │   └── ram_loader/                    # 纯 RAM 注入助手（MIT 清洁室内置实现）
 └── docs/
     ├── ARCHITECTURE.md                # 总体架构、纯 RAM 注入与各模块实现思路
@@ -199,7 +201,7 @@ a7r3-ram-extension-menu/
 | `未找到 A7R3 v3.10 系统库` | 触发源码编译但本机尚无 `firmware/lib/` | 连上相机运行 `one-click --rebuild` 或 `init-camera` 自动只读提取（使用预编译 `.so` 无需此步） |
 | 一直提示处于 **MTP 模式** | 相机 USB 模式设为了 MTP / PC 遥控 | 相机 `MENU -> 设置 -> USB连接` 改为 **大容量存储 (Mass Storage)** |
 | **注入中途拔线**导致电脑打不开存储卡 | 临时 `libusb-win32` 驱动尚未卸载 | 运行 `python tools/a7r3_addon_console.py restore-driver`（或在控制台选 `[8]`）自动还原为原生 `USBSTOR` |
-| `Sony-PMCA-RE` (`pmca`) 缺失 | 未克隆上游 `pmca` 仓库 | 执行 `git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE` |
+| `pyusb` / `pycryptodomex` 缺失 | 尚未安装精简 Python 依赖 | 在仓库根目录执行 `pip install -r requirements.txt`（`pmca` 已内置，无需再克隆 `Sony-PMCA-RE`） |
 | 菜单里「水平仪与直方图同显」**灰色不可选** | `/tmp_bt/dual_hud_payload.bin` 缺失或指纹校验失败（仅支持 v3.10） | 确认相机固件为 **ILCE-7RM3 v3.10**，重新运行一次 `one-click` / `deploy` 或 `gen-payload --from-camera` |
 | 不关机直接恢复原厂菜单 | 需在线卸载 RAM 模块钩子 | 连线运行 `python tools/a7r3_addon_console.py quit`，或直接关闭相机开关重开 |
 

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Sony ILCE-7RM3 (A7R3 v3.10) Pure-RAM Extension Menu Console Tool (Experimental)."""
 import argparse
+import hashlib
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 import datetime
 
@@ -20,6 +24,7 @@ from env_config import load_local_env  # noqa: E402
 load_local_env(SDK_DIR)
 
 from deploy_ram import (  # noqa: E402
+    MAX_SO_BYTES,
     SenserPlatformBackend,
     SonySenserCamera,
     cmd_deploy,
@@ -45,6 +50,14 @@ DEFAULT_SO = SDK_DIR / "build" / "demo_native_tab7_ram.so"
 DEFAULT_SRC = SDK_DIR / "src" / "entries" / "demo_native_tab7.c"
 GEN_ASSETS = TOOLS_DIR / "gen_md3_assets.py"
 BUILD_SCRIPT = TOOLS_DIR / "build_addon.py"
+
+GITHUB_LATEST_RELEASE_API = (
+    "https://api.github.com/repos/Kevin2651486613/a7r3-ram-extension-menu/releases/latest"
+)
+GITHUB_LATEST_SO_URL = (
+    "https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so"
+)
+RELEASE_SO_ASSET_NAME = "demo_native_tab7_ram.so"
 
 HOOK_CHECKS = (
     ("SDK_TAB7_ALIVE", "后台工作线程存活"),
@@ -255,9 +268,14 @@ def action_check(so_path: Path) -> int:
     for pkg, desc in (
         ("keystone", "Keystone ARM 汇编"),
         ("usb", "PyUSB / libusb 驱动"),
-        ("pmca", "Sony-PMCA-RE (A7R3_PMCA_DIR)"),
+        ("Cryptodome", "PyCryptodomex 认证加密"),
+        ("pmca", "USB Service Mode 通信层"),
     ):
-        found = importlib.util.find_spec(pkg) is not None
+        if pkg == "Cryptodome":
+            spec = importlib.util.find_spec("Cryptodome") or importlib.util.find_spec("Crypto")
+        else:
+            spec = importlib.util.find_spec(pkg)
+        found = spec is not None
         extra_note = ""
         if found and pkg == "usb":
             try:
@@ -275,9 +293,28 @@ def action_check(so_path: Path) -> int:
                     extra_note = " — 未检测到 libusb 原生库，请运行 `brew install libusb`"
                 else:
                     extra_note = " — 未检测到 libusb 原生库，请安装 `libusb-1.0-0` 并配置 udev 权限"
-        if not found and pkg == "pmca":
-            extra_note = " — 请运行 `git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE`"
-        status_str = "已就绪" if found else ("未检测到" + extra_note if not extra_note else extra_note.lstrip(" — "))
+        elif not found and pkg in ("keystone", "usb", "Cryptodome"):
+            extra_note = " — 请运行 `pip install -r requirements.txt`"
+        elif pkg == "pmca":
+            from deploy_ram import _USB_IMPORT_ERR
+
+            if not found:
+                extra_note = f" — 未找到内置 {TOOLS_DIR / 'vendor' / 'pmca'} (可确认文件完整或在 .env.local 设置 A7R3_PMCA_DIR)"
+            elif _USB_IMPORT_ERR is not None:
+                found = False
+                extra_note = f" — 加载失败 ({_USB_IMPORT_ERR})，请运行 `pip install -r requirements.txt`"
+            else:
+                origin = Path(spec.origin).resolve() if spec and spec.origin else None
+                vendored_dir = (TOOLS_DIR / "vendor" / "pmca").resolve()
+                if origin is not None and (origin == vendored_dir or vendored_dir in origin.parents):
+                    extra_note = " — 已内置精简版 (MIT, tools/vendor/pmca)"
+                elif origin is not None:
+                    extra_note = f" — 已就绪 ({origin.parent})"
+
+        if found:
+            status_str = extra_note.lstrip(" — ") if extra_note else "已就绪"
+        else:
+            status_str = extra_note.lstrip(" — ") if extra_note else "未检测到"
         print(f"  [{'OK' if found else 'WARN'}] Python 包 {pkg} ({desc}): {status_str}")
 
     try:
@@ -526,13 +563,125 @@ def _has_llvm_toolchain() -> bool:
     )
 
 
+def _missing_python_deps() -> list[str]:
+    missing: list[str] = []
+    if importlib.util.find_spec("keystone") is None:
+        missing.append("keystone-engine")
+    if importlib.util.find_spec("usb") is None:
+        missing.append("pyusb")
+    if importlib.util.find_spec("Cryptodome") is None and importlib.util.find_spec("Crypto") is None:
+        missing.append("pycryptodomex")
+    return missing
+
+
+def ensure_python_deps() -> int | None:
+    """Install requirements.txt if core packages are missing and re-exec so imports reload cleanly."""
+    missing = _missing_python_deps()
+    if not missing:
+        return None
+    if os.environ.get("A7R3_PIP_BOOTSTRAPPED") == "1":
+        raise RuntimeError(
+            f"自动安装 Python 依赖后仍缺少包 {missing}，请手动执行 `pip install -r requirements.txt` 检查安装环境。"
+        )
+    req_file = SDK_DIR / "requirements.txt"
+    print(f"[*] 检测到缺少 Python 依赖 ({', '.join(missing)})，正在自动执行 `pip install -r requirements.txt`...")
+    res = subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req_file)], capture_output=False)
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"自动安装依赖失败 (exit={res.returncode})。请检查网络后手动运行 `pip install -r requirements.txt`。"
+        )
+    env = dict(os.environ)
+    env["A7R3_PIP_BOOTSTRAPPED"] = "1"
+    reexec = subprocess.run([sys.executable, *sys.argv], env=env, capture_output=False)
+    return reexec.returncode
+
+
+def _resolve_release_so_target() -> tuple[str, int | None, str | None, str]:
+    custom_url = os.environ.get("A7R3_RELEASE_SO_URL", "").strip()
+    if custom_url:
+        return custom_url, None, None, "custom"
+
+    req = urllib.request.Request(
+        GITHUB_LATEST_RELEASE_API,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "a7r3-ram-extension-menu",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        tag_name = str(data.get("tag_name") or "latest")
+        for asset in data.get("assets") or ():
+            if asset.get("name") == RELEASE_SO_ASSET_NAME and asset.get("browser_download_url"):
+                url = str(asset["browser_download_url"])
+                raw_size = asset.get("size")
+                exp_size = int(raw_size) if isinstance(raw_size, int) and raw_size > 0 else None
+                digest = str(asset.get("digest") or "").strip().lower()
+                exp_sha = digest[7:] if digest.startswith("sha256:") and len(digest) == 71 else None
+                return url, exp_size, exp_sha, tag_name
+    except Exception:
+        pass
+    return GITHUB_LATEST_SO_URL, None, None, "latest"
+
+
+def download_prebuilt_so(dest_path: Path, timeout_s: float = 25.0) -> Path:
+    """Download prebuilt ARM32 ELF .so from GitHub Releases with size/SHA-256/ELF validation."""
+    url, exp_size, exp_sha, tag_name = _resolve_release_so_target()
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest_path.with_name(dest_path.name + ".part")
+    req = urllib.request.Request(url, headers={"User-Agent": "a7r3-ram-extension-menu"})
+    hasher = hashlib.sha256()
+    total = 0
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp, tmp_path.open("wb") as out_f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_SO_BYTES:
+                    raise RuntimeError(
+                        f"下载的预编译插件超过大小上限 ({total} > {MAX_SO_BYTES} bytes)"
+                    )
+                hasher.update(chunk)
+                out_f.write(chunk)
+
+        if exp_size is not None and total != exp_size:
+            raise RuntimeError(f"下载大小校验失败: 期望 {exp_size} bytes，实际 {total} bytes")
+        got_sha = hasher.hexdigest()
+        if exp_sha is not None and got_sha != exp_sha:
+            raise RuntimeError(f"SHA-256 校验失败: 期望 {exp_sha}，实际 {got_sha}")
+
+        validate_so_path(tmp_path)
+        tmp_path.replace(dest_path)
+        print(f"[+] 已拉取预编译插件 ({tag_name}): {dest_path} ({total} bytes, SHA-256={got_sha[:16]}...)")
+        return dest_path
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def action_download_so(so_path: Path) -> int:
+    download_prebuilt_so(so_path)
+    return 0
+
+
 def action_one_click(
     so_path: Path,
     force: bool = False,
     rebuild: bool = False,
     keep_driver: bool = False,
 ) -> int:
-    """Full end-to-end flow: auto driver swap -> build if needed -> runtime dual-HUD + RAM deploy -> restore drivers."""
+    """Full end-to-end flow: auto deps -> auto prebuilt/build -> driver swap -> RAM deploy -> restore drivers."""
+    boot_rc = ensure_python_deps()
+    if boot_rc is not None:
+        return boot_rc
+
     validate_runtime_env()
     print("=== Sony A7R3 一键纯 RAM 注入全流程 ===")
     if is_windows_host():
@@ -547,12 +696,33 @@ def action_one_click(
             so_valid = False
 
     llvm_ready = _has_llvm_toolchain()
-    need_build = bool(rebuild or (not so_valid) or (llvm_ready and _sources_newer_than(so_path)))
+    need_build = False
+
+    if so_valid:
+        need_build = bool(rebuild or (llvm_ready and _sources_newer_than(so_path)))
+    elif not rebuild and (so_path == DEFAULT_SO or so_path.name == RELEASE_SO_ASSET_NAME):
+        print(f"[*] 未检测到本地 {so_path.name}，正在从 GitHub Releases 自动拉取最新预编译插件...")
+        try:
+            download_prebuilt_so(so_path)
+            so_valid = True
+        except Exception as dl_exc:
+            if llvm_ready:
+                print(f"[!] 自动拉取预编译插件失败 ({dl_exc})，本机已安装 LLVM，将改为自动从源码编译。")
+                need_build = True
+            else:
+                raise RuntimeError(
+                    f"未检测到本地 {so_path.name}，且从 GitHub Releases 自动拉取失败 ({dl_exc})。\n"
+                    f"- 请检查网络（或设置镜像环境变量 A7R3_RELEASE_SO_URL），手动下载后放入 {so_path}：\n"
+                    f"  {GITHUB_LATEST_SO_URL}\n"
+                    "- 或开发者安装 LLVM 后自行编译：Windows 运行 `winget install LLVM.LLVM` 后加 `--rebuild`。"
+                ) from dl_exc
+    else:
+        need_build = True
 
     if need_build and not llvm_ready:
         raise RuntimeError(
             f"未找到可用插件 {so_path}，且本机未安装 LLVM 工具链。\n"
-            "- 普通用户（无需安装 LLVM）：请从 GitHub Releases 下载预编译 `demo_native_tab7_ram.so` 放入 `build/` 后重试；\n"
+            f"- 普通用户（无需安装 LLVM）：请从 GitHub Releases 下载预编译 `{RELEASE_SO_ASSET_NAME}` 放入 `build/` 后重试；\n"
             "- 开发者编译源码：Windows 可运行 `winget install LLVM.LLVM` 后重试（会自动探测默认安装路径）。"
         )
 
@@ -613,7 +783,7 @@ def print_banner(so_path: Path) -> None:
         mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
         so_info = f"就绪 ({st.st_size} bytes, 更新于 {mtime})"
     else:
-        so_info = "未编译 (一键注入会自动编译)"
+        so_info = "未准备 (一键注入将自动从 Release 拉取)"
 
     print("=" * 68)
     print("  Sony ILCE-7RM3 (A7R3 v3.10) 原生第 7 大类拓展菜单控制台 (Route A1)")
@@ -621,7 +791,7 @@ def print_banner(so_path: Path) -> None:
     print("=" * 68)
     print(f"  目标插件: {so_path.name} -> {so_info}")
     print("-" * 68)
-    print("  [1] 全自动一键注入 (自动换驱动 + 自动初始化/编译 + 纯 RAM 部署 + 还原驱动)")
+    print("  [1] 全自动一键注入 (缺依赖自动pip + 缺.so自动拉取 + 自动换驱 + 纯RAM部署 + 还原)")
     print("  [2] 仅部署当前已编译插件 (不自动切换驱动)")
     print("  [3] 查看相机连接与运行状态 / 日志")
     print("  [4] 安全卸载插件并恢复原生钩子 (不重启相机)")
@@ -694,6 +864,7 @@ def main() -> int:
         nargs="?",
         choices=(
             "one-click",
+            "download-so",
             "restore-driver",
             "deploy",
             "status",
@@ -749,6 +920,8 @@ def main() -> int:
             return action_check(args.so)
         if args.action == "one-click":
             return action_one_click(args.so, force=args.force, rebuild=args.rebuild, keep_driver=args.keep_driver)
+        if args.action == "download-so":
+            return action_download_so(args.so)
         if args.action == "restore-driver":
             return action_restore_driver()
         if args.action == "deploy":

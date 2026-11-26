@@ -15,7 +15,7 @@
 **第 2 步：准备 Python 环境**
 - 要求 Python 3.10 或更高。运行 `python --version`，不满足就停下并报告。
 - 在仓库根目录执行：`python -m venv .venv`，然后激活它，再执行 `pip install -r requirements.txt`。
-- 按 `requirements.txt` 顶部注释，把 ma1co/Sony-PMCA-RE 克隆到仓库同级目录（即 `../Sony-PMCA-RE`），或在 `.env.local` 里用 `A7R3_PMCA_DIR` 指定路径。
+- 精简版 MIT `pmca` 通信层已内置于 `tools/vendor/pmca/`，**无需**再单独克隆 `Sony-PMCA-RE`。
 
 **第 3 步：配置本机路径**
 - 把 `.env.example` 复制为 `.env.local`（该文件已被 gitignore）。
@@ -49,4 +49,4 @@
 ## 常用快捷入口（给用户与维护者）
 - Windows 用户无需手动运行 Zadig：将相机设为 **大容量存储 (MSC)** 连线后，直接双击 `一键注入拓展菜单.bat`（自动提权 → 自动绑定临时 `libusb-win32` → 如缺失则自动只读初始化并编译 → 纯 RAM 注入 → 自动卸载全部临时驱动并恢复原生 `USBSTOR`）。
 - 命令行等效指令：`python tools/a7r3_addon_console.py one-click`；手动清理恢复驱动：`python tools/a7r3_addon_console.py restore-driver`。
-- `.env.local`、`firmware/`、`experiments/` 和 `Sony-PMCA-RE` 都是每台机器自己准备的，不随仓库分发。
+- `.env.local`、`firmware/` 与 `experiments/` 都是每台机器自己准备的，不随仓库分发；USB 通信层已内置于 `tools/vendor/pmca/`。

@@ -12,7 +12,7 @@
 | 脚本与控制台 | **Python 3.10+** | 运行编译脚本、字模生成器、纯 RAM 注入器及交互式控制台（依赖见根目录 [requirements.txt](../requirements.txt)） |
 | 中文点阵生成 | **Pillow** (`PIL`) + 系统字体 | `tools/gen_md3_assets.py` 生成 4-bit 抗锯齿中文标签表 `src/md3_demo_labels.h`（Windows/macOS/Linux 自动探测） |
 | 远程注入与跳板 | **Keystone Engine** (`keystone-engine`) + **内置 MIT `tools/ram_loader/`** | 自包含生成 ARM `dlopen` 跳板、`/proc/<pid>/mem` (`ptrace` 自动回退) 写入器、流式十六进制读取器与终端命令封装 |
-| USB 通信层 | **[ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE)** (`pmca` + `pyusb` / `libusb`) | 通过 USB Service Mode 与相机建立 BusyBox 终端并传输文件至 `/tmp_bt` |
+| USB 通信层 | **内置精简版 `tools/vendor/pmca/`**（源自 [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE), MIT）+ `pyusb` / `pycryptodomex` | 通过 USB Service Mode 与相机建立 BusyBox 终端并传输文件至 `/tmp_bt`（已内置最小闭环，无需用户单独克隆） |
 | 音频转码 | **FFmpeg** (`ffmpeg`) | 将任意音乐/快门声转为机内兼容的 24 kHz 单声道 16-bit 未压缩 PCM `.wav` |
 | Windows 自动驱动工具 | `tools/win_usb_driver.py` + `tools/win_driver/wdi-simple.exe` (`pbatard/libwdi` LGPL-3.0) | Windows 端自动为 `054C:0BFF` / `0336` 临时安装 `libusb-win32`，注入完成后自动全部卸载恢复原生 `USBSTOR`（无需手动 Zadig） |
 | Windows 启动器 | [`一键注入拓展菜单.bat`](../一键注入拓展菜单.bat) / [`启动拓展菜单工具.bat`](../启动拓展菜单工具.bat) | 自动 UAC 提权并优先识别 `.venv` / `python` / `py -3` 一键运行全流程或进入交互控制台 |
@@ -24,11 +24,8 @@
 ### 2.1 安装 Python 与系统工具
 
 ```bash
-# 1. 安装 Python 依赖
+# 仅需安装 3 个精简 Python 依赖（pmca 已内置在 tools/vendor/pmca/，无需再克隆外部仓库）
 pip install -r requirements.txt
-
-# 2. 获取 MIT 协议的 Sony-PMCA-RE（支持 A7R3_PMCA_DIR 或同级目录自动识别）
-git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
 ```
 
 - **macOS (Apple Silicon / Intel)**：
@@ -43,7 +40,7 @@ git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
   sudo apt install clang lld llvm libusb-1.0-0 ffmpeg
   ```
   *(普通用户需配置 Sony `054c` 的 `udev` 规则或用 `sudo` 运行注入。)*
-- **Windows**：若仅使用 Release 预编译 `.so`，可跳过 LLVM 直接双击 `一键注入拓展菜单.bat`；如需修改 C 代码重新编译，执行 `winget install LLVM.LLVM` 即可（脚本自动探测 `C:\Program Files\LLVM\bin`）。
+- **Windows**：直接双击 [`一键注入拓展菜单.bat`](../一键注入拓展菜单.bat) 时，若缺失 Python 包会自动安装 `requirements.txt`，若本地缺少 `build/demo_native_tab7_ram.so` 会自动从 GitHub Releases 拉取并校验 SHA-256（可通过 `A7R3_RELEASE_SO_URL` 指定自定义镜像下载地址）。如需修改 C 代码重新编译，执行 `winget install LLVM.LLVM` 即可（脚本自动探测 `C:\Program Files\LLVM\bin`）。
 
 ### 2.2 一键从相机初始化或手动配置 `.env.local`
 
@@ -64,7 +61,7 @@ cp .env.example .env.local
 | `A7R3_LLVM_BIN` | `/opt/homebrew/opt/llvm/bin` | 包含 `clang`、`ld.lld`、`llvm-readelf` 的目录（Windows 未设置时会自动查找 `PATH` 与 `C:\Program Files\LLVM\bin`） |
 | `A7R3_FW_LIB_DIR` | `/path/to/your/a7r3_v310_extraction/lib` | 用户自行从合法持有的设备/固件中本地提取的 `/lib`（仅编译 `.so` 时需要 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so`） |
 | `A7R3_UXC_PATH` | `/path/to/.../usr/share/app/viewStlrec.uxc` | 可选：本地 `viewStlrec.uxc` 路径；未填时会在 `A7R3_FW_LIB_DIR` 相邻目录自动探测生成 `build/dual_hud_payload.bin` |
-| `A7R3_PMCA_DIR` | `/path/to/Sony-PMCA-RE` | 若已克隆至 `./Sony-PMCA-RE` 或 `../Sony-PMCA-RE`，或通过 pip 安装，可留空自动识别 |
+| `A7R3_PMCA_DIR` | `/path/to/Sony-PMCA-RE` | 可选开发者覆盖项；留空时默认使用仓库内置的 `tools/vendor/pmca/`（MIT） |
 | `A7R3_FONT_BOLD` / `A7R3_FONT_REG` | `/System/Library/Fonts/PingFang.ttc` | 仅重新生成 MD3 中文点阵字模时使用（Route A1 原生第 7 大类不需要此项） |
 
 ---
@@ -108,7 +105,8 @@ python tools/gen_dual_hud_payload.py --from-camera
 python tools/a7r3_addon_console.py
 
 # 命令行一键模式：
-python tools/a7r3_addon_console.py one-click       # Windows 全自动闭环（双击 一键注入拓展菜单.bat 等效）：自动换驱动 + 自动初始化/编译 + 纯 RAM 部署 + 自动换回原生 USBSTOR
+python tools/a7r3_addon_console.py one-click       # Windows 全自动闭环：缺依赖自动 pip + 缺 .so 自动拉取 + 自动换驱 + 部署 + 还原原生 USBSTOR
+python tools/a7r3_addon_console.py download-so     # 单独从 GitHub Releases 拉取最新预编译 demo_native_tab7_ram.so 并校验 SHA-256
 python tools/a7r3_addon_console.py restore-driver  # 手动清除全部 Sony 临时 libusb-win32 驱动包并恢复原生 USBSTOR
 python tools/a7r3_addon_console.py check           # 离线检查 Python/环境变量/工具链/.so/驱动工具状态（无需连接相机）
 python tools/a7r3_addon_console.py build           # 交叉编译当前默认产物 demo_native_tab7_ram.so
