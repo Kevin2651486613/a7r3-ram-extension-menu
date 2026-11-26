@@ -2,12 +2,9 @@
 #include "a7r3_pb_focus.h"
 #include "a7r3_sys.h"
 
-#if defined(__has_include) && __has_include("a7r3_dual_hud_payload.local.h")
-#include "a7r3_dual_hud_payload.local.h"
-#define A7R3_DUAL_HUD_HAS_PAYLOAD 1
-#else
-#define A7R3_DUAL_HUD_HAS_PAYLOAD 0
-#endif
+#define DUAL_HUD_BIN_PATH       "/tmp_bt/dual_hud_payload.bin"
+#define DUAL_HUD_BIN_MAGIC      0x44554844u /* "DHUD" little-endian */
+#define DUAL_HUD_PAYLOAD_LEN    2380u
 
 /* Verified A7R3 v3.10 libObj.so & viewUnified2.so GOT / vtable offsets */
 #define LIBOBJ_GET_RESID_GOT    0x0121a5c0UL
@@ -33,36 +30,41 @@ typedef void *(*rec_dtor_fn)(void *rec_ptr);
 typedef int (*get_layout_mode_fn)(void *self, int dev);
 typedef int (*level_route_fn)(void *self, unsigned widget_id, unsigned *out_master_id);
 
-#if A7R3_DUAL_HUD_HAS_PAYLOAD
 struct saved_rec_slot {
     void *volatile addr;
     void *orig_w0;
 };
 
+/* Populated once at install time from /tmp_bt/dual_hud_payload.bin (zero runtime I/O). */
+static struct {
+    uint32_t tag; /* Bit 31 clear (0x00000000u) -> inline RecordPtr data at +4 */
+    uint8_t payload[DUAL_HUD_PAYLOAD_LEN];
+} __attribute__((aligned(4))) g_dual_level_rec;
+
 static struct saved_rec_slot g_saved_recs[SAVED_REC_SLOTS];
 
 static unsigned long g_obj_base;
+static unsigned long g_vu2_base;
+
 static volatile unsigned long *g_get_resid_got;
 static volatile unsigned long *g_rec_dtor_got;
+static volatile unsigned long *g_get_layout_got;
 static volatile unsigned long *g_route_slot;
 
 static unsigned long g_orig_get_resid_got;
 static unsigned long g_orig_rec_dtor_got;
+static unsigned long g_orig_get_layout_got;
 static unsigned long g_orig_route_slot;
 
 static get_res_id_fn g_real_get_res_id;
 static rec_dtor_fn g_real_rec_dtor;
-static level_route_fn g_real_level_route;
-static volatile int g_dual_ever_parsed;
-#endif
-
-static unsigned long g_vu2_base;
-static volatile unsigned long *g_get_layout_got;
-static unsigned long g_orig_get_layout_got;
 static get_layout_mode_fn g_real_get_layout_mode;
+static level_route_fn g_real_level_route;
 
+static volatile int g_dual_has_payload;
 static volatile int g_dual_installed;
 static volatile int g_dual_enabled;
+static volatile int g_dual_ever_parsed;
 
 static volatile unsigned g_parse_hits;
 static volatile unsigned g_gate1_hits;
@@ -72,14 +74,68 @@ static unsigned g_last_parse_hits;
 static unsigned g_last_gate1_hits;
 static unsigned g_last_route_hits;
 
-#if A7R3_DUAL_HUD_HAS_PAYLOAD
+static uint32_t dual_fnv1a32(const uint8_t *buf, unsigned len)
+{
+    uint32_t h = 2166136261u;
+    unsigned i;
+
+    for (i = 0u; i < len; i++) {
+        h ^= (uint32_t)buf[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static int dual_read_exact(int fd, uint8_t *dst, unsigned len)
+{
+    unsigned done = 0u;
+
+    while (done < len) {
+        long r = a7r3_read(fd, dst + done, (size_t)(len - done));
+        if (r <= 0)
+            return -1;
+        done += (unsigned)r;
+    }
+    return 0;
+}
+
+static int dual_load_runtime_payload(void)
+{
+    uint32_t hdr[3];
+    uint8_t extra = 0u;
+    int fd;
+
+    g_dual_level_rec.tag = 0u;
+    fd = a7r3_open(DUAL_HUD_BIN_PATH, A7R3_O_RDONLY, 0);
+    if (fd < 0)
+        return 0;
+
+    if (dual_read_exact(fd, (uint8_t *)hdr, sizeof(hdr)) != 0 ||
+        hdr[0] != DUAL_HUD_BIN_MAGIC ||
+        hdr[1] != DUAL_HUD_PAYLOAD_LEN ||
+        dual_read_exact(fd, g_dual_level_rec.payload, DUAL_HUD_PAYLOAD_LEN) != 0 ||
+        a7r3_read(fd, &extra, 1u) != 0) {
+        a7r3_close(fd);
+        return 0;
+    }
+    a7r3_close(fd);
+
+    if (dual_fnv1a32(g_dual_level_rec.payload, DUAL_HUD_PAYLOAD_LEN) != hdr[2])
+        return 0;
+
+    g_dual_level_rec.tag = 0x00000000u;
+    a7r3_dsb();
+    return 1;
+}
+
 __attribute__((noinline))
 static unsigned dual_get_res_id_hook(void *rec_ptr)
 {
     unsigned long lr = (unsigned long)(uintptr_t)__builtin_return_address(0);
     unsigned res_id = g_real_get_res_id(rec_ptr);
 
-    if (g_dual_enabled &&
+    if (g_dual_has_payload &&
+        g_dual_enabled &&
         res_id == RES_ID_LEVEL_OUTER &&
         (lr & ~1UL) == (g_obj_base + LIBOBJ_PARSER_CALL_RET) &&
         rec_ptr != NULL) {
@@ -127,7 +183,7 @@ static void *dual_rec_dtor_hook(void *rec_ptr)
 __attribute__((noinline))
 static int dual_level_route_hook(void *self, unsigned widget_id, unsigned *out_master_id)
 {
-    if ((g_dual_enabled || g_dual_ever_parsed) && out_master_id != NULL) {
+    if (g_dual_has_payload && (g_dual_enabled || g_dual_ever_parsed) && out_master_id != NULL) {
         if (widget_id == WID_HISTOGRAM) {
             *out_master_id = WID_NEW_MASTER;
             g_route_hits++;
@@ -141,7 +197,6 @@ static int dual_level_route_hook(void *self, unsigned widget_id, unsigned *out_m
     }
     return g_real_level_route(self, widget_id, out_master_id);
 }
-#endif
 
 __attribute__((noinline))
 static int dual_get_layout_mode_hook(void *self, int dev)
@@ -152,16 +207,13 @@ static int dual_get_layout_mode_hook(void *self, int dev)
     if (dev == 2)
         a7r3_pb_focus_on_disp_mode(mode);
 
-#if A7R3_DUAL_HUD_HAS_PAYLOAD
-    if (g_dual_enabled &&
+    if (g_dual_has_payload &&
+        g_dual_enabled &&
         mode == 4 &&
         (lr & ~1UL) == (g_vu2_base + VU2_GATE1_CALL_RET)) {
         g_gate1_hits++;
         return 5;
     }
-#else
-    (void)lr;
-#endif
     return mode;
 }
 
@@ -169,11 +221,6 @@ int a7r3_dual_hud_install(void)
 {
     unsigned long vu2_base;
     volatile unsigned long *layout_slot;
-#if A7R3_DUAL_HUD_HAS_PAYLOAD
-    unsigned long obj_base;
-    volatile unsigned long *resid_slot, *dtor_slot, *route_slot;
-    unsigned i;
-#endif
 
     if (g_dual_installed)
         return 0;
@@ -190,73 +237,75 @@ int a7r3_dual_hud_install(void)
         return -2;
     }
 
-#if A7R3_DUAL_HUD_HAS_PAYLOAD
-    obj_base = a7r3_mod_base("/libObj.so");
-    if (!obj_base) {
-        a7r3_log_str("SDK_DUAL_NO_MOD\n");
-        return -1;
-    }
-
-    resid_slot = (volatile unsigned long *)(obj_base + LIBOBJ_GET_RESID_GOT);
-    dtor_slot  = (volatile unsigned long *)(obj_base + LIBOBJ_REC_DTOR_GOT);
-    route_slot = (volatile unsigned long *)(vu2_base + VU2_LEVEL_ROUTE_SLOT);
-
-    if (!a7r3_pm_writable((const void *)resid_slot, 4u) ||
-        !a7r3_pm_writable((const void *)dtor_slot, 4u) ||
-        !a7r3_pm_writable((const void *)route_slot, 4u)) {
-        a7r3_log_str("SDK_DUAL_BAD_SLOT\n");
-        return -2;
-    }
-
-    if (*route_slot != (vu2_base + VU2_LEVEL_ROUTE_REAL)) {
-        a7r3_log_hex("SDK_DUAL_ROUTE_MISMATCH=", *route_slot);
-        return -3;
-    }
-
-    g_obj_base = obj_base;
-    g_vu2_base = vu2_base;
-
-    g_orig_get_resid_got  = *resid_slot;
-    g_orig_rec_dtor_got   = *dtor_slot;
-    g_orig_get_layout_got = *layout_slot;
-    g_orig_route_slot     = *route_slot;
-
-    g_real_get_res_id      = (get_res_id_fn)(obj_base + LIBOBJ_GET_RESID_REAL);
-    g_real_rec_dtor        = (rec_dtor_fn)(obj_base + LIBOBJ_REC_DTOR_REAL);
-    g_real_get_layout_mode = (get_layout_mode_fn)(vu2_base + VU2_GET_LAYOUT_REAL);
-    g_real_level_route     = (level_route_fn)(vu2_base + VU2_LEVEL_ROUTE_REAL);
-
-    for (i = 0u; i < SAVED_REC_SLOTS; i++) {
-        g_saved_recs[i].addr = NULL;
-        g_saved_recs[i].orig_w0 = NULL;
-    }
-
-    a7r3_dsb();
-    /* Install ~RecordPtr hook before getResID hook so no redirected RecordPtr
-     * can ever destruct without restoring orig_w0 first. */
-    *dtor_slot = (unsigned long)(uintptr_t)&dual_rec_dtor_hook;
-    a7r3_dsb();
-    *resid_slot  = (unsigned long)(uintptr_t)&dual_get_res_id_hook;
-    *layout_slot = (unsigned long)(uintptr_t)&dual_get_layout_mode_hook;
-    *route_slot  = (unsigned long)(uintptr_t)&dual_level_route_hook;
-    a7r3_dsb();
-
-    g_get_resid_got  = resid_slot;
-    g_rec_dtor_got   = dtor_slot;
-    g_get_layout_got = layout_slot;
-    g_route_slot     = route_slot;
-#else
     g_vu2_base = vu2_base;
     g_orig_get_layout_got  = *layout_slot;
     g_real_get_layout_mode = (get_layout_mode_fn)(vu2_base + VU2_GET_LAYOUT_REAL);
 
-    a7r3_dsb();
-    *layout_slot = (unsigned long)(uintptr_t)&dual_get_layout_mode_hook;
-    a7r3_dsb();
+    g_dual_has_payload = dual_load_runtime_payload();
 
-    g_get_layout_got = layout_slot;
-    a7r3_log_str("SDK_DUAL_NO_LOCAL_PAYLOAD\n");
-#endif
+    if (g_dual_has_payload) {
+        unsigned long obj_base = a7r3_mod_base("/libObj.so");
+        volatile unsigned long *resid_slot, *dtor_slot, *route_slot;
+        unsigned i;
+
+        if (!obj_base) {
+            a7r3_log_str("SDK_DUAL_NO_MOD\n");
+            return -1;
+        }
+
+        resid_slot = (volatile unsigned long *)(obj_base + LIBOBJ_GET_RESID_GOT);
+        dtor_slot  = (volatile unsigned long *)(obj_base + LIBOBJ_REC_DTOR_GOT);
+        route_slot = (volatile unsigned long *)(vu2_base + VU2_LEVEL_ROUTE_SLOT);
+
+        if (!a7r3_pm_writable((const void *)resid_slot, 4u) ||
+            !a7r3_pm_writable((const void *)dtor_slot, 4u) ||
+            !a7r3_pm_writable((const void *)route_slot, 4u)) {
+            a7r3_log_str("SDK_DUAL_BAD_SLOT\n");
+            return -2;
+        }
+
+        if (*route_slot != (vu2_base + VU2_LEVEL_ROUTE_REAL)) {
+            a7r3_log_hex("SDK_DUAL_ROUTE_MISMATCH=", *route_slot);
+            return -3;
+        }
+
+        g_obj_base = obj_base;
+        g_orig_get_resid_got = *resid_slot;
+        g_orig_rec_dtor_got  = *dtor_slot;
+        g_orig_route_slot    = *route_slot;
+
+        g_real_get_res_id  = (get_res_id_fn)(obj_base + LIBOBJ_GET_RESID_REAL);
+        g_real_rec_dtor    = (rec_dtor_fn)(obj_base + LIBOBJ_REC_DTOR_REAL);
+        g_real_level_route = (level_route_fn)(vu2_base + VU2_LEVEL_ROUTE_REAL);
+
+        for (i = 0u; i < SAVED_REC_SLOTS; i++) {
+            g_saved_recs[i].addr = NULL;
+            g_saved_recs[i].orig_w0 = NULL;
+        }
+
+        a7r3_dsb();
+        /* Install ~RecordPtr hook before getResID hook so no redirected RecordPtr
+         * can ever destruct without restoring orig_w0 first. */
+        *dtor_slot = (unsigned long)(uintptr_t)&dual_rec_dtor_hook;
+        a7r3_dsb();
+        *resid_slot  = (unsigned long)(uintptr_t)&dual_get_res_id_hook;
+        *layout_slot = (unsigned long)(uintptr_t)&dual_get_layout_mode_hook;
+        *route_slot  = (unsigned long)(uintptr_t)&dual_level_route_hook;
+        a7r3_dsb();
+
+        g_get_resid_got  = resid_slot;
+        g_rec_dtor_got   = dtor_slot;
+        g_get_layout_got = layout_slot;
+        g_route_slot     = route_slot;
+        a7r3_log_hex("SDK_DUAL_PAYLOAD_OK=", 1UL);
+    } else {
+        a7r3_dsb();
+        *layout_slot = (unsigned long)(uintptr_t)&dual_get_layout_mode_hook;
+        a7r3_dsb();
+
+        g_get_layout_got = layout_slot;
+        a7r3_log_str("SDK_DUAL_NO_PAYLOAD_BIN\n");
+    }
 
     g_dual_installed = 1;
     a7r3_dsb();
@@ -273,15 +322,14 @@ void a7r3_dual_hud_remove(void)
     g_dual_enabled = 0;
     a7r3_dsb();
 
-#if A7R3_DUAL_HUD_HAS_PAYLOAD
     /* Restore getResID first and drain any active ResourceLayoutParser frame
      * before restoring ~RecordPtr. */
     if (g_get_resid_got) {
         *g_get_resid_got = g_orig_get_resid_got;
         g_get_resid_got = NULL;
+        a7r3_dsb();
+        a7r3_nanosleep_ms(30u);
     }
-    a7r3_dsb();
-    a7r3_nanosleep_ms(30u);
 
     if (g_rec_dtor_got) {
         *g_rec_dtor_got = g_orig_rec_dtor_got;
@@ -291,8 +339,6 @@ void a7r3_dual_hud_remove(void)
         *g_route_slot = g_orig_route_slot;
         g_route_slot = NULL;
     }
-#endif
-
     if (g_get_layout_got) {
         *g_get_layout_got = g_orig_get_layout_got;
         g_get_layout_got = NULL;
@@ -300,25 +346,24 @@ void a7r3_dual_hud_remove(void)
     a7r3_dsb();
     a7r3_nanosleep_ms(30u);
 
+    g_dual_has_payload = 0;
     g_dual_installed = 0;
     a7r3_log_hex("SDK_DUAL_RESTORED=", 1UL);
 }
 
 int a7r3_dual_hud_has_payload(void)
 {
-    return A7R3_DUAL_HUD_HAS_PAYLOAD;
+    return g_dual_has_payload;
 }
 
 void a7r3_dual_hud_set_enabled(int enable)
 {
     int on = enable ? 1 : 0;
-#if !A7R3_DUAL_HUD_HAS_PAYLOAD
-    if (on) {
+    if (on && !g_dual_has_payload) {
         a7r3_log_str("SDK_DUAL_NO_PAYLOAD\n");
         g_dual_enabled = 0;
         return;
     }
-#endif
     if (on == g_dual_enabled)
         return;
     g_dual_enabled = on;

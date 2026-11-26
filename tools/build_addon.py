@@ -57,6 +57,10 @@ def resolve_llvm_bin(cli_val: Path | None) -> Path | None:
         cand = Path(lld_in_path).resolve().parent
         if (cand / "clang").exists() or (cand / "clang.exe").exists():
             return cand
+    if sys.platform == "win32":
+        for win_dir in (Path(r"C:\Program Files\LLVM\bin"), Path(r"C:\Program Files (x86)\LLVM\bin")):
+            if (win_dir / "clang.exe").is_file() and (win_dir / "ld.lld.exe").is_file():
+                return win_dir
     for brew_dir in (Path("/opt/homebrew/opt/llvm/bin"), Path("/usr/local/opt/llvm/bin")):
         if (brew_dir / "clang").is_file() and (brew_dir / "ld.lld").is_file():
             return brew_dir
@@ -224,7 +228,6 @@ def main() -> int:
     rc_gen = ensure_generated_labels(src_path)
     if rc_gen != 0:
         return rc_gen
-    ensure_dual_hud_payload(fw_lib_dir)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [

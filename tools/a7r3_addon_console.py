@@ -213,7 +213,16 @@ def action_check(so_path: Path) -> int:
     ok_all &= py_ok
 
     env_local = SDK_DIR / ".env.local"
-    print(f"  [{'OK' if env_local.is_file() else 'INFO'}] 本地环境配置 .env.local: {'已加载' if env_local.is_file() else '未创建 (将使用系统环境变量)'}")
+    print(f"  [{'OK' if env_local.is_file() else 'INFO'}] 本地环境配置 .env.local: {'已加载' if env_local.is_file() else '未创建 (将使用系统环境变量 / 自动探测)'}")
+
+    so_valid = False
+    so_err: Exception | None = None
+    if so_path.exists():
+        try:
+            validate_so_path(so_path)
+            so_valid = True
+        except Exception as exc:
+            so_err = exc
 
     llvm_dir = resolve_llvm_bin(None)
     llvm_ok = bool(
@@ -222,10 +231,12 @@ def action_check(so_path: Path) -> int:
         and tool_exe(llvm_dir, "ld.lld").is_file()
         and tool_exe(llvm_dir, "llvm-readelf").is_file()
     )
-    print(
-        f"  [{'OK' if llvm_ok else 'WARN'}] LLVM 工具链 (clang + ld.lld + llvm-readelf): "
-        f"{llvm_dir if llvm_ok else '未找到完整 LLVM (Windows 请装 LLVM；macOS 请 brew install llvm；Linux 请装 clang lld llvm)'}"
-    )
+    if llvm_ok:
+        print(f"  [OK] LLVM 工具链 (clang + ld.lld + llvm-readelf): {llvm_dir}")
+    elif so_valid:
+        print("  [INFO] LLVM 工具链: 未安装 (使用预编译 .so 时无需 LLVM；仅修改 C 源码重新编译时需要)")
+    else:
+        print("  [WARN] LLVM 工具链 (clang + ld.lld + llvm-readelf): 未找到 (Windows 可运行 `winget install LLVM.LLVM`，或直接使用 Release 预编译 .so)")
 
     fw_dir = resolve_fw_lib_dir(None)
     fw_ok = bool(
@@ -234,10 +245,12 @@ def action_check(so_path: Path) -> int:
         and (fw_dir / "libdl-2.11.2.so").is_file()
         and (fw_dir / "libpthread-2.11.2.so").is_file()
     )
-    print(
-        f"  [{'OK' if fw_ok else 'WARN'}] A7R3 v3.10 系统库 (/lib): "
-        f"{fw_dir if fw_ok else '未找到，连接相机运行 `python tools/a7r3_addon_console.py init-camera` 可自动提取'}"
-    )
+    if fw_ok:
+        print(f"  [OK] A7R3 v3.10 系统库 (/lib): {fw_dir}")
+    elif so_valid:
+        print("  [INFO] A7R3 v3.10 系统库 (/lib): 未本地缓存 (使用预编译 .so 时无需；仅重新编译时需要)")
+    else:
+        print("  [WARN] A7R3 v3.10 系统库 (/lib): 未找到，编译时连接相机运行 `init-camera` 或 `one-click` 可自动提取")
 
     for pkg, desc in (
         ("keystone", "Keystone ARM 汇编"),
@@ -257,7 +270,7 @@ def action_check(so_path: Path) -> int:
             if not has_native:
                 found = False
                 if sys.platform == "win32":
-                    extra_note = " — 未检测到 libusb 原生驱动，请用 Zadig 为相机绑定 libusb-win32 / libusbK"
+                    extra_note = " — 未检测到 libusb 运行时驱动，请使用根目录 `一键注入拓展菜单.bat` 自动装配并在结束后还原"
                 elif sys.platform == "darwin":
                     extra_note = " — 未检测到 libusb 原生库，请运行 `brew install libusb`"
                 else:
@@ -290,31 +303,30 @@ def action_check(so_path: Path) -> int:
         except Exception:
             pass
 
-    local_payload = SDK_DIR / "src" / "a7r3_dual_hud_payload.local.h"
-    if local_payload.is_file():
-        payload_msg = "已配置 (.local.h)"
-    else:
-        try:
-            from gen_dual_hud_payload import find_local_uxc
+    try:
+        from gen_dual_hud_payload import DEFAULT_BIN_OUT, find_local_uxc, validate_runtime_bin
 
-            found_uxc = find_local_uxc(fw_dir)
-        except Exception:
-            found_uxc = None
-        if found_uxc is not None:
-            payload_msg = f"未生成，但已检测到 {found_uxc.name} (编译或运行 gen-payload 时将自动生成)"
+        if DEFAULT_BIN_OUT.is_file():
+            try:
+                validate_runtime_bin(DEFAULT_BIN_OUT)
+                payload_msg = f"已就绪 (运行时载荷 build/{DEFAULT_BIN_OUT.name})"
+            except Exception as exc:
+                payload_msg = f"缓存损坏 ({exc})，下次部署将自动从相机重新提取"
+        elif (found_uxc := find_local_uxc(fw_dir)) is not None:
+            payload_msg = f"未生成，但已检测到 {found_uxc.name} (部署时将自动生成运行时载荷)"
         else:
-            payload_msg = "未配置 (水平仪直方图同显将置灰；连接相机运行 `gen-payload --from-camera` 可生成)"
-    print(f"  [INFO] 可选本地 Dual-HUD 载荷: {payload_msg}")
+            payload_msg = "未缓存 (一键注入/部署时将自动从已连接相机只读提取并上传 /tmp_bt/dual_hud_payload.bin)"
+    except Exception:
+        payload_msg = "未缓存"
+    print(f"  [INFO] 运行时 Dual-HUD 载荷: {payload_msg}")
 
-    if so_path.exists():
-        try:
-            validate_so_path(so_path)
-            print(f"  [OK] 插件产物 ELF32 ARM 校验通过: {so_path.name} ({so_path.stat().st_size} bytes)")
-        except Exception as exc:
-            print(f"  [FAIL] 插件产物校验失败: {exc}")
-            ok_all = False
+    if so_valid:
+        print(f"  [OK] 插件产物 ELF32 ARM 校验通过: {so_path.name} ({so_path.stat().st_size} bytes)")
+    elif so_err is not None:
+        print(f"  [FAIL] 插件产物校验失败: {so_err}")
+        ok_all = False
     else:
-        print(f"  [INFO] 插件产物尚未编译: {so_path}")
+        print(f"  [INFO] 插件产物尚未准备: {so_path} (请先下载 Release 预编译产物或运行 build 编译)")
 
     return 0 if ok_all else 1
 
@@ -418,31 +430,31 @@ def action_build(so_path: Path) -> int:
 def action_gen_payload(from_camera: bool = False, force: bool = False) -> int:
     from gen_dual_hud_payload import (
         CAMERA_UXC_PATH,
-        DEFAULT_OUT,
+        DEFAULT_BIN_OUT,
         find_local_uxc,
-        generate_local_header,
+        generate_runtime_bin,
         pull_uxc_from_camera,
     )
 
     if not from_camera:
         uxc_path = find_local_uxc()
         if uxc_path is not None:
-            out = generate_local_header(uxc_path.read_bytes(), out_path=DEFAULT_OUT)
-            print(f"[+] 已从本地固件文件生成双显载荷: {out} (来源: {uxc_path})")
+            out = generate_runtime_bin(uxc_path.read_bytes(), out_path=DEFAULT_BIN_OUT)
+            print(f"[+] 已从本地固件文件生成运行时双显载荷: {out} (来源: {uxc_path})")
             return 0
         print("[*] 本地未检测到 viewStlrec.uxc，尝试从已连接相机只读读取...")
 
     print(f"[*] 正在从相机只读获取 {CAMERA_UXC_PATH} (零闪存写入)...")
     uxc_bytes = pull_uxc_from_camera(force=force)
-    out = generate_local_header(uxc_bytes, out_path=DEFAULT_OUT)
-    print(f"[+] 已从相机本机生成双显载荷: {out}")
-    print("[*] 请执行 `[6] 一键编译并热更新部署` (update) 使同显功能生效。")
+    out = generate_runtime_bin(uxc_bytes, out_path=DEFAULT_BIN_OUT)
+    print(f"[+] 已从相机本机生成运行时双显载荷: {out}")
+    print("[*] 部署时将自动上传至相机 /tmp_bt/dual_hud_payload.bin (纯 RAM，无需重新编译 .so)。")
     return 0
 
 
 def action_init_camera(force: bool = False) -> int:
     """Pull 3 /lib linking libraries + viewStlrec.uxc read-only from connected A7R3."""
-    from gen_dual_hud_payload import CAMERA_UXC_PATH, DEFAULT_OUT, generate_local_header
+    from gen_dual_hud_payload import CAMERA_UXC_PATH, DEFAULT_BIN_OUT, generate_runtime_bin
 
     out_lib_dir = SDK_DIR / "firmware" / "lib"
     out_lib_dir.mkdir(parents=True, exist_ok=True)
@@ -463,8 +475,8 @@ def action_init_camera(force: bool = False) -> int:
             print(f"[+] 已保存 {dst} ({len(data)} bytes)")
 
         uxc_bytes = read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
-        out_h = generate_local_header(uxc_bytes, out_path=DEFAULT_OUT)
-        print(f"[+] 已生成本地双显载荷: {out_h}")
+        out_bin = generate_runtime_bin(uxc_bytes, out_path=DEFAULT_BIN_OUT)
+        print(f"[+] 已生成运行时双显载荷: {out_bin}")
     finally:
         driver_ctx.__exit__(None, None, None)
 
@@ -501,10 +513,17 @@ def _sources_newer_than(so_path: Path) -> bool:
         if sub_dir.is_dir():
             watch_files.extend(sub_dir.glob("*.c"))
             watch_files.extend(sub_dir.glob("*.h"))
-    local_payload = SDK_DIR / "src" / "a7r3_dual_hud_payload.local.h"
-    if local_payload.is_file():
-        watch_files.append(local_payload)
     return any(p.is_file() and p.stat().st_mtime > so_mtime for p in watch_files)
+
+
+def _has_llvm_toolchain() -> bool:
+    llvm_dir = resolve_llvm_bin(None)
+    return bool(
+        llvm_dir
+        and tool_exe(llvm_dir, "clang").is_file()
+        and tool_exe(llvm_dir, "ld.lld").is_file()
+        and tool_exe(llvm_dir, "llvm-readelf").is_file()
+    )
 
 
 def action_one_click(
@@ -513,47 +532,58 @@ def action_one_click(
     rebuild: bool = False,
     keep_driver: bool = False,
 ) -> int:
-    """Full end-to-end flow: auto driver swap -> init if needed -> build if needed -> RAM deploy -> restore drivers."""
-    from gen_dual_hud_payload import CAMERA_UXC_PATH, DEFAULT_OUT, find_local_uxc, generate_local_header
-
+    """Full end-to-end flow: auto driver swap -> build if needed -> runtime dual-HUD + RAM deploy -> restore drivers."""
     validate_runtime_env()
     print("=== Sony A7R3 一键纯 RAM 注入全流程 ===")
     if is_windows_host():
         print("[*] 模式: 自动切换临时 libusb-win32 驱动 -> 注入部署 -> 完成后自动全部还原。")
+
+    so_valid = False
+    if so_path.is_file():
+        try:
+            validate_so_path(so_path)
+            so_valid = True
+        except Exception:
+            so_valid = False
+
+    llvm_ready = _has_llvm_toolchain()
+    need_build = bool(rebuild or (not so_valid) or (llvm_ready and _sources_newer_than(so_path)))
+
+    if need_build and not llvm_ready:
+        raise RuntimeError(
+            f"未找到可用插件 {so_path}，且本机未安装 LLVM 工具链。\n"
+            "- 普通用户（无需安装 LLVM）：请从 GitHub Releases 下载预编译 `demo_native_tab7_ram.so` 放入 `build/` 后重试；\n"
+            "- 开发者编译源码：Windows 可运行 `winget install LLVM.LLVM` 后重试（会自动探测默认安装路径）。"
+        )
 
     with SonyDriverGuard(auto_restore=not keep_driver):
         seen_senser: set[int] = set()
         wait_cb = (lambda: ensure_service_mode_driver_ready(seen_senser)) if is_windows_host() else None
         driver_ctx, backend, sh = open_service_session(force=force, on_wait_senser=wait_cb)
         try:
-            fw_dir = resolve_fw_lib_dir(None)
-            fw_ok = bool(
-                fw_dir
-                and (fw_dir / "libc-2.11.2.so").is_file()
-                and (fw_dir / "libdl-2.11.2.so").is_file()
-                and (fw_dir / "libpthread-2.11.2.so").is_file()
-            )
-            if not fw_ok:
-                print("[*] 未检测到本地 A7R3 v3.10 编译依赖库，正在从相机只读初始化...")
-                out_lib_dir = SDK_DIR / "firmware" / "lib"
-                out_lib_dir.mkdir(parents=True, exist_ok=True)
-                for remote_p in ("/lib/libc-2.11.2.so", "/lib/libdl-2.11.2.so", "/lib/libpthread-2.11.2.so"):
-                    data = read_camera_file_verified(backend, sh, remote_p)
-                    dst = out_lib_dir / Path(remote_p).name
-                    dst.write_bytes(data)
-                    print(f"[+] 已保存 {dst} ({len(data)} bytes)")
-                fw_dir = out_lib_dir
+            if need_build:
+                fw_dir = resolve_fw_lib_dir(None)
+                fw_ok = bool(
+                    fw_dir
+                    and (fw_dir / "libc-2.11.2.so").is_file()
+                    and (fw_dir / "libdl-2.11.2.so").is_file()
+                    and (fw_dir / "libpthread-2.11.2.so").is_file()
+                )
+                if not fw_ok:
+                    print("[*] 未检测到本地 A7R3 v3.10 编译依赖库，正在从相机只读初始化...")
+                    out_lib_dir = SDK_DIR / "firmware" / "lib"
+                    out_lib_dir.mkdir(parents=True, exist_ok=True)
+                    for remote_p in ("/lib/libc-2.11.2.so", "/lib/libdl-2.11.2.so", "/lib/libpthread-2.11.2.so"):
+                        data = read_camera_file_verified(backend, sh, remote_p)
+                        dst = out_lib_dir / Path(remote_p).name
+                        dst.write_bytes(data)
+                        print(f"[+] 已保存 {dst} ({len(data)} bytes)")
 
-            if not DEFAULT_OUT.is_file() and find_local_uxc(fw_dir) is None:
-                print(f"[*] 正在从相机只读读取 {CAMERA_UXC_PATH} 以生成双显载荷...")
-                uxc_bytes = read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
-                out_h = generate_local_header(uxc_bytes, out_path=DEFAULT_OUT)
-                print(f"[+] 已生成本地双显载荷: {out_h}")
-
-            if rebuild or _sources_newer_than(so_path):
                 rc_build = action_build(so_path)
                 if rc_build != 0:
                     return rc_build
+            else:
+                print(f"[*] 使用已有插件产物: {so_path.name} ({so_path.stat().st_size} bytes，跳过编译)")
 
             validate_so_path(so_path)
             pid = get_im_pid(sh, force=force)

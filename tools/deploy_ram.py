@@ -493,6 +493,49 @@ def read_mem_bytes(sh, reader: str, addr: int, length: int) -> bytes:
     return data
 
 
+def _ensure_dual_hud_runtime_bin(backend, sh) -> None:
+    """Prepare & upload /tmp_bt/dual_hud_payload.bin from local cache, local uxc, or camera read-only."""
+    from gen_dual_hud_payload import (
+        CAMERA_BIN_PATH,
+        CAMERA_UXC_PATH,
+        DEFAULT_BIN_OUT,
+        find_local_uxc,
+        generate_runtime_bin,
+        validate_runtime_bin,
+    )
+
+    bin_bytes: bytes | None = None
+    if DEFAULT_BIN_OUT.is_file():
+        try:
+            bin_bytes = validate_runtime_bin(DEFAULT_BIN_OUT)
+        except Exception:
+            bin_bytes = None
+
+    if bin_bytes is None:
+        uxc_path = find_local_uxc()
+        if uxc_path is not None:
+            try:
+                generate_runtime_bin(uxc_path.read_bytes(), DEFAULT_BIN_OUT)
+                bin_bytes = validate_runtime_bin(DEFAULT_BIN_OUT)
+                print(f"[+] 已从本地 {uxc_path.name} 生成运行时双显载荷: {DEFAULT_BIN_OUT.name}")
+            except Exception as exc:
+                print(f"[!] 警告: 本地 viewStlrec.uxc 未通过双显指纹校验 ({exc})")
+
+    if bin_bytes is None:
+        try:
+            print(f"[*] 正在从相机只读获取 {CAMERA_UXC_PATH} 以生成运行时双显载荷...")
+            uxc_bytes = read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
+            generate_runtime_bin(uxc_bytes, DEFAULT_BIN_OUT)
+            bin_bytes = validate_runtime_bin(DEFAULT_BIN_OUT)
+            print(f"[+] 已缓存运行时双显载荷: {DEFAULT_BIN_OUT.name} ({len(bin_bytes)} bytes)")
+        except Exception as exc:
+            print(f"[!] 警告: 未能准备运行时双显载荷 ({exc})；水平仪与直方图同显将保持置灰透传。")
+            sh(f"rm -f {CAMERA_BIN_PATH}")
+            return
+
+    upload_tmpbt(backend, sh, CAMERA_BIN_PATH, bin_bytes)
+
+
 def cmd_deploy(backend, sh, so_path: Path, open_now: bool, force: bool = False) -> int:
     require_usb_runtime()
     from ram_loader.build_ram_tools import (
@@ -504,7 +547,7 @@ def cmd_deploy(backend, sh, so_path: Path, open_now: bool, force: bool = False) 
     so_bytes = validate_arm32_shared_elf(so_path)
 
     sh("echo -n 'keepalive' > /sys/power/wake_lock 2>/dev/null || true")
-    check_tmpbt_space(sh, len(so_bytes))
+    check_tmpbt_space(sh, len(so_bytes) + 4096)
 
     pid = get_verified_im_pid(sh, force=force)
     maps = sh(f"cat /proc/{pid}/maps")
@@ -550,6 +593,7 @@ def cmd_deploy(backend, sh, so_path: Path, open_now: bool, force: bool = False) 
             "为防止覆盖正在运行的代码页导致崩溃，请先重启相机再部署。"
         )
 
+    _ensure_dual_hud_runtime_bin(backend, sh)
     upload_tmpbt(backend, sh, target_so, so_bytes, executable=True)
     mmap_elf = build_remote_svc_elf(pid, svc_addr, 192, (0, 0x10000, 7, 0x22, 0xFFFFFFFF, 0))
     upload_tmpbt(backend, sh, "/tmp_bt/sdk_mmap", mmap_elf, executable=True)

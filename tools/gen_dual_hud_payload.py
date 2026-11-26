@@ -20,6 +20,7 @@ TOOLS_DIR = Path(__file__).resolve().parent
 SDK_DIR = TOOLS_DIR.parent
 SRC_DIR = SDK_DIR / "src"
 DEFAULT_OUT = SRC_DIR / "a7r3_dual_hud_payload.local.h"
+DEFAULT_BIN_OUT = SDK_DIR / "build" / "dual_hud_payload.bin"
 
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
@@ -33,7 +34,10 @@ SLOT_HIST_OUTER = 0x2A       # 0x0200802a (DISP Mode 5 histogram)
 WID_HIST_SRC_MASTER = 0xD1073927
 WID_NEW_MASTER = 0xD1153927
 EXPECTED_PATCHED_LEN = 2380
+DUAL_HUD_BIN_MAGIC = 0x44554844  # "DHUD" little-endian
+DUAL_HUD_BIN_TOTAL_LEN = 12 + EXPECTED_PATCHED_LEN
 CAMERA_UXC_PATH = "/usr/share/app/viewStlrec.uxc"
+CAMERA_BIN_PATH = "/tmp_bt/dual_hud_payload.bin"
 
 # SHA-256 fingerprints of the two UXC records this patch actually reads from,
 # taken from a known-good, unpatched Sony ILCE-7RM3 v3.10 viewStlrec.uxc.
@@ -246,6 +250,41 @@ def pull_uxc_from_camera(force: bool = False) -> bytes:
         return read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
 
 
+def fnv1a32(data: bytes) -> int:
+    h = 2166136261
+    for b in data:
+        h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+    return h
+
+
+def pack_runtime_payload_bin(payload: bytes) -> bytes:
+    if len(payload) != EXPECTED_PATCHED_LEN:
+        raise ValueError(f"Expected {EXPECTED_PATCHED_LEN} bytes, got {len(payload)}")
+    return struct.pack("<III", DUAL_HUD_BIN_MAGIC, len(payload), fnv1a32(payload)) + payload
+
+
+def validate_runtime_bin(bin_path: Path) -> bytes:
+    data = bin_path.read_bytes()
+    if len(data) != DUAL_HUD_BIN_TOTAL_LEN:
+        raise ValueError(f"{bin_path} 长度无效: {len(data)} != {DUAL_HUD_BIN_TOTAL_LEN}")
+    magic, plen, csum = struct.unpack("<III", data[:12])
+    payload = data[12:]
+    if magic != DUAL_HUD_BIN_MAGIC or plen != EXPECTED_PATCHED_LEN or fnv1a32(payload) != csum:
+        raise ValueError(f"{bin_path} 魔数或校验和失败")
+    return data
+
+
+def generate_runtime_bin(
+    uxc_bytes: bytes,
+    out_path: Path = DEFAULT_BIN_OUT,
+) -> Path:
+    payload = patch_viewstlrec(uxc_bytes)
+    blob = pack_runtime_payload_bin(payload)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(blob)
+    return out_path
+
+
 def generate_local_header(
     uxc_bytes: bytes,
     out_path: Path = DEFAULT_OUT,
@@ -259,7 +298,7 @@ def generate_local_header(
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Generate gitignored src/a7r3_dual_hud_payload.local.h from viewStlrec.uxc"
+        description="Generate runtime build/dual_hud_payload.bin (or optional local .h) from viewStlrec.uxc"
     )
     ap.add_argument("--uxc", type=Path, default=None, help="Path to local viewStlrec.uxc")
     ap.add_argument(
@@ -273,7 +312,12 @@ def main() -> int:
         action="store_true",
         help="Read /usr/share/app/viewStlrec.uxc read-only over USB from connected A7R3",
     )
-    ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help=f"Output header (default: {DEFAULT_OUT})")
+    ap.add_argument(
+        "--header",
+        action="store_true",
+        help="Write legacy C header src/a7r3_dual_hud_payload.local.h instead of build/dual_hud_payload.bin",
+    )
+    ap.add_argument("--out", type=Path, default=None, help=f"Output file (default: {DEFAULT_BIN_OUT})")
     ap.add_argument("--force", action="store_true", help="Bypass camera model check when using --from-camera")
     args = ap.parse_args()
 
@@ -295,8 +339,13 @@ def main() -> int:
             uxc_bytes = uxc_path.read_bytes()
             source_desc = str(uxc_path)
 
-        out = generate_local_header(uxc_bytes, out_path=args.out)
-        print(f"[+] Generated {out} ({EXPECTED_PATCHED_LEN} bytes) from {source_desc}")
+        if args.header:
+            out_path = args.out or DEFAULT_OUT
+            out = generate_local_header(uxc_bytes, out_path=out_path)
+        else:
+            out_path = args.out or DEFAULT_BIN_OUT
+            out = generate_runtime_bin(uxc_bytes, out_path=out_path)
+        print(f"[+] Generated {out} ({out.stat().st_size} bytes) from {source_desc}")
         return 0
     except Exception as exc:
         print(f"[!] Failed to generate dual-HUD payload: {exc}", file=sys.stderr)
