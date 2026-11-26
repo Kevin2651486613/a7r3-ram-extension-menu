@@ -1,6 +1,7 @@
 # Sony α7R III (ILCE-7RM3 v3.10) 原生拓展菜单（Pure-RAM）
 
 [![Target](https://img.shields.io/badge/Target-ILCE--7RM3%20v3.10-blue.svg)]()
+[![Release](https://img.shields.io/github/v/release/Kevin2651486613/a7r3-ram-extension-menu?label=Release)](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)
 [![Mode](https://img.shields.io/badge/Mode-Pure--RAM%20(%2Ftmp__bt)-brightgreen.svg)]()
 [![Windows](https://img.shields.io/badge/Windows-One--Click%20Auto%20Driver-0078D6.svg)]()
 [![Compliance](https://img.shields.io/badge/Firmware-Zero%20Proprietary%20Assets-blue.svg)]()
@@ -16,6 +17,21 @@
 > - **唯一持续维护主线（`main` / `feat/native-tab7-a1`）**：原生第 7 大类拓展菜单 + 纯内存菜单触摸控制，直接调用原厂 GPU 光栅化与索尼系统字库。
 > - **MD3 归档路线（Tag `v1.0-md3` / [`src/legacy/`](src/legacy/)）**：**已暂停开发，仅归档保留**，不再维护，也不再接受 MD3 新功能 PR。
 > - **零固件分发**：本仓库**不包含**任何 Sony 固件、专有 `.so`、布局二进制或字库数据；Windows 一键驱动助手 `wdi-simple.exe` 依据上游 LGPL-3.0 / GPL-3.0 协议独立存放在 [`tools/win_driver/`](tools/win_driver/)。
+
+---
+
+## 预编译下载（普通用户免装 LLVM / 免手动 Zadig）
+
+> [!IMPORTANT]
+> **普通体验用户不需要安装 LLVM 编译器，也不需要手动打开 Zadig 安装或卸载驱动！**
+> 直接下载下方 Release 中的纯原创预编译 `demo_native_tab7_ram.so`，放到 `build\demo_native_tab7_ram.so` 后双击 **[一键注入拓展菜单.bat](一键注入拓展菜单.bat)** 即可全自动完成注入与驱动还原。
+
+| 项目 | 内容 |
+| --- | --- |
+| 当前发布版本 | [`v2.1-native-tab7`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/tag/v2.1-native-tab7)（[全部 Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)） |
+| 预编译插件直链 | [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so)（`106,752 bytes`，纯原创零 Sony 固件字节） |
+| SHA-256 校验 | `1c435d9f8a64a27580a4518a05b61c6779a2937c03fc58867000d37607a2f366` |
+| 本地放置路径 | `build\demo_native_tab7_ram.so` |
 
 ---
 
@@ -63,7 +79,7 @@
      git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
      ```
 2. **放入预编译插件**：
-   - 从本仓库 **GitHub Releases** 下载 `demo_native_tab7_ram.so`，保存为 `build\demo_native_tab7_ram.so`。
+   - 从 **[GitHub Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)** 下载 [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so)，保存为 `build\demo_native_tab7_ram.so`。
 3. **设置相机并连线**：
    - 将相机 `MENU -> 设置(黄箱子) -> USB连接` 设为 **大容量存储 (Mass Storage)**，通过数据线直连电脑并开机。
 4. **双击一键注入**：
