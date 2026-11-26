@@ -28,9 +28,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 当前发布版本 | [`v2.1-native-tab7`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/tag/v2.1-native-tab7)（[全部 Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)） |
-| 预编译插件直链 | [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so)（`106,752 bytes`，纯原创零 Sony 固件字节） |
-| SHA-256 校验 | `1c435d9f8a64a27580a4518a05b61c6779a2937c03fc58867000d37607a2f366` |
+| 当前发布版本 | [`v2.2-native-tab7`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/tag/v2.2-native-tab7)（[全部 Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)） |
+| 预编译插件直链 | [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so)（`112,280 bytes`，纯原创零 Sony 固件字节） |
+| SHA-256 校验 | `34f5de25cb961a235e7932b87a9b63881afb64292ff24b73a5b7518ccae06f60` |
 | 本地放置路径 | `build\demo_native_tab7_ram.so` |
 
 ---
