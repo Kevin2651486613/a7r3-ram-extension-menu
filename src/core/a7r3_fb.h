@@ -66,4 +66,13 @@ int  a7r3_fb_pop_probed_pa(unsigned long *out_pa);
 void a7r3_fb_pb_box_show(int cx, int cy, int half_w, int half_h);
 void a7r3_fb_pb_box_hide(void);
 
+/* Called right after a native GPU submit: keep the reticle on top only while the
+ * native UI has not painted over it. Suppression is armed synchronously from the
+ * input hook when a non-navigation key is seen, so a popup opened by that key is
+ * not polluted before the box is repainted. */
+void a7r3_fb_pb_box_native_draw(void);
+void a7r3_fb_pb_box_suppress(void);
+int  a7r3_fb_pb_box_is_suppressed(void);
+int  a7r3_fb_pb_box_is_active(void);
+
 #endif /* A7R3_FB_HEADER_H */

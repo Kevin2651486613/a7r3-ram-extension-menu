@@ -39,6 +39,8 @@ static volatile unsigned g_pa_tail;
 static volatile unsigned g_pa_budget;
 
 #define PB_PX_MAX 640u
+#define PB_SUPPRESS_GRACE_MS 300u  /* keep the reticle hidden briefly after a key
+                                    * press even when nothing was drawn over it */
 struct pb_px {
     uint16_t x;
     uint16_t y;
@@ -51,6 +53,8 @@ static volatile unsigned g_pb_px_cnt;
 static volatile int g_pb_box_active;
 static volatile int g_pb_in_ioctl;
 static volatile int g_pb_updating;
+static volatile int g_pb_suppress;      /* a non-nav key may open a native dialog */
+static volatile unsigned g_pb_suppress_ms;
 static int g_pb_cur_cx = -1;
 static int g_pb_cur_cy = -1;
 static int g_pb_cur_hw = -1;
@@ -449,13 +453,147 @@ static void pb_stamp_pixels(int refresh_orig)
         unsigned y = g_pb_px[i].y;
         unsigned off = y * A7R3_FB_W + x;
         uint16_t cur = g_flip_va[off];
+        uint16_t curb = g_flip_vb[off];
         uint16_t drawn = g_pb_px[i].drawn;
-        if (refresh_orig && cur != drawn)
-            g_pb_px[i].orig = cur;
+        if (refresh_orig) {
+            /* flipB is the buffer the native UI presents; use it as the photo
+             * baseline first so restore detection is not poisoned by a stale
+             * flipA frame. */
+            if (curb != drawn)
+                g_pb_px[i].orig = curb;
+            else if (cur != drawn)
+                g_pb_px[i].orig = cur;
+        }
         g_flip_va[off] = drawn;
         g_flip_vb[off] = drawn;
         g_ren_va[a7r3_morton_index(x, y)] = drawn;
     }
+    a7r3_dsb();
+}
+
+/* Compare two RGBA4444 pixels nibble-wise; small tolerance covers a re-rendered
+ * photo that is not bit-identical to the pixels captured before the overlay. */
+static int pb_px_nibble_close(uint16_t a, uint16_t b, int tol)
+{
+    unsigned shift;
+
+    for (shift = 0u; shift < 16u; shift += 4u) {
+        int d = (int)((a >> shift) & 0x0fu) - (int)((b >> shift) & 0x0fu);
+        if (d < 0)
+            d = -d;
+        if (d > tol)
+            return 0;
+    }
+    return 1;
+}
+
+/*
+ * Sample the two reticle pixels that the native UI always draws over first
+ * (outer corner + centre dot) in all three scanout buffers. The A7R3 keeps
+ * flipA and flipB/render at different pipeline stages: a native popup may be
+ * present in only one of them, so a single-buffer probe misses it.
+ *   0 = nothing to sample
+ *   1 = reticle intact in every buffer
+ *   2 = no buffer carries an overlay and the photo is back (dialog dismissed)
+ *   3 = at least one buffer has something native painted over the reticle
+ */
+static int pb_box_sample_state(void)
+{
+    unsigned n = g_pb_px_cnt;
+    unsigned off0, off1, mz0, mz1;
+    uint16_t d0, d1, o0, o1;
+    int intact = 1, overlay = 0, restored = 0;
+    int buf;
+
+    if (!g_fb_ok || !g_pb_box_active || n == 0u)
+        return 0;
+    off0 = (unsigned)g_pb_px[0].y * A7R3_FB_W + (unsigned)g_pb_px[0].x;
+    off1 = (unsigned)g_pb_px[n - 1u].y * A7R3_FB_W + (unsigned)g_pb_px[n - 1u].x;
+    mz0 = a7r3_morton_index(g_pb_px[0].x, g_pb_px[0].y);
+    mz1 = a7r3_morton_index(g_pb_px[n - 1u].x, g_pb_px[n - 1u].y);
+    d0 = g_pb_px[0].drawn;
+    d1 = g_pb_px[n - 1u].drawn;
+    o0 = g_pb_px[0].orig;
+    o1 = g_pb_px[n - 1u].orig;
+
+    for (buf = 0; buf < 3; buf++) {
+        uint16_t c0, c1;
+        if (buf == 0) {
+            c0 = g_flip_va[off0];
+            c1 = g_flip_va[off1];
+        } else if (buf == 1) {
+            c0 = g_flip_vb[off0];
+            c1 = g_flip_vb[off1];
+        } else {
+            c0 = g_ren_va[mz0];
+            c1 = g_ren_va[mz1];
+        }
+        if (c0 == d0 && c1 == d1)
+            continue;
+        intact = 0;
+        if (pb_px_nibble_close(c0, o0, 1) && pb_px_nibble_close(c1, o1, 1)) {
+            restored = 1;
+            continue;
+        }
+        overlay = 1;
+    }
+    if (intact)
+        return 1;
+    if (overlay)
+        return 3;
+    if (restored)
+        return 2;
+    return 3;
+}
+
+static int pb_suppress_hold(int st)
+{
+    if (!g_pb_suppress)
+        return 0;
+    if ((unsigned)(a7r3_now_ms() - g_pb_suppress_ms) < PB_SUPPRESS_GRACE_MS)
+        return 1;
+    if (st == 1 || st == 2) {
+        /* The key did not paint over the reticle, or the dialog closed and the
+         * photo is back: resume normal reticle handling. */
+        g_pb_suppress = 0;
+        a7r3_dsb();
+        return 0;
+    }
+    return 1;
+}
+
+void a7r3_fb_pb_box_suppress(void)
+{
+    if (!g_fb_ok || !g_pb_box_active)
+        return;
+    g_pb_suppress = 1;
+    g_pb_suppress_ms = a7r3_now_ms();
+    a7r3_dsb();
+}
+
+int a7r3_fb_pb_box_is_suppressed(void)
+{
+    return g_pb_suppress;
+}
+
+int a7r3_fb_pb_box_is_active(void)
+{
+    return g_pb_box_active;
+}
+
+void a7r3_fb_pb_box_native_draw(void)
+{
+    int st;
+
+    if (!g_fb_ok || !g_pb_box_active || g_pb_updating)
+        return;
+    st = pb_box_sample_state();
+    if (pb_suppress_hold(st))
+        return;               /* pending dialog: keep the reticle off the screen */
+    if (st == 2 || st == 3)
+        pb_stamp_pixels(1);
+    else if (st == 1)
+        pb_stamp_pixels(0);
     a7r3_dsb();
 }
 
@@ -466,6 +604,7 @@ void a7r3_fb_pb_box_hide(void)
 
     if (!g_pb_box_active && g_pb_px_cnt == 0u)
         return;
+    g_pb_suppress = 0;
     g_pb_updating = 1;
     g_pb_box_active = 0;
     a7r3_dsb();
@@ -518,19 +657,24 @@ void a7r3_fb_pb_box_show(int cx, int cy, int half_w, int half_h)
     if (g_guard_active || a7r3_fb_open() != 0)
         return;
 
+    if (g_pb_suppress &&
+        (g_pb_cur_cx != cx || g_pb_cur_cy != cy ||
+         g_pb_cur_hw != half_w || g_pb_cur_hh != half_h)) {
+        /* The focus point moved: a new still image replaced the dialog. */
+        g_pb_suppress = 0;
+        a7r3_dsb();
+    }
+
     if (g_pb_box_active &&
         g_pb_cur_cx == cx && g_pb_cur_cy == cy &&
         g_pb_cur_hw == half_w && g_pb_cur_hh == half_h) {
-        unsigned n = g_pb_px_cnt;
-        if (n == 0u)
+        int st = pb_box_sample_state();
+        if (pb_suppress_hold(st))
             return;
-        {
-            unsigned off0 = (unsigned)g_pb_px[0].y * A7R3_FB_W + (unsigned)g_pb_px[0].x;
-            unsigned off1 = (unsigned)g_pb_px[n - 1u].y * A7R3_FB_W + (unsigned)g_pb_px[n - 1u].x;
-            if (g_flip_va[off0] == g_pb_px[0].drawn &&
-                g_flip_va[off1] == g_pb_px[n - 1u].drawn)
-                return;
-        }
+        if (st == 1)
+            return;
+        /* st == 2: photo restored after the dialog closed.
+         * st == 3: normal native frame update replaced the reticle. */
         g_pb_updating = 1;
         a7r3_dsb();
         for (spin = 0; spin < 20 && g_pb_in_ioctl; spin++)
@@ -583,7 +727,7 @@ static int ioctl_hook_fn(int fd, unsigned long req, unsigned long arg)
             a7r3_dsb();
             if (!g_guard_active && g_pb_box_active && !g_pb_updating &&
                 a7r3_pb_focus_allow_stamp())
-                pb_stamp_pixels(0);
+                a7r3_fb_pb_box_native_draw();
             g_pb_in_ioctl = 0;
             a7r3_dsb();
         }

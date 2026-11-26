@@ -53,6 +53,11 @@ void a7r3_input_set_ext_dismiss_cb(a7r3_ext_dismiss_cb cb);
 int  a7r3_input_take_ext_dismiss(unsigned *out_code, unsigned *out_status);
 int  a7r3_input_take_disp_switch(unsigned *out_code, unsigned *out_status);
 
+/* Synchronous observer for every non-navigation physical key, called on the input
+ * thread before the native app consumes the message (used to pre-hide overlays). */
+typedef void (*a7r3_nonnative_cb)(unsigned code);
+void a7r3_input_set_nonnative_cb(a7r3_nonnative_cb cb);
+
 /* Shield physical EV compensation dial (0x70d2/0x70d3) so firmware always sees 0. */
 void a7r3_input_set_ev_dial_shield(int enable);
 int  a7r3_input_get_ev_dial_shield(void);

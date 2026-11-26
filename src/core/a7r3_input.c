@@ -66,6 +66,7 @@ static volatile unsigned g_ev_real_w2;
 static volatile int g_ev_real_valid;
 static volatile int g_ev_log_pending;
 static volatile a7r3_ext_dismiss_cb g_ext_cb;
+static volatile a7r3_nonnative_cb g_nonnative_cb;
 static volatile unsigned g_ext_code;
 static volatile unsigned g_ext_status;
 static volatile int g_ext_pending;
@@ -156,6 +157,10 @@ static int nm_osal_rcv_hook(unsigned qid, void **msg_out, int timeout)
                 }
                 if (is_passive_sensor_event(w[0]))
                     return rc;
+                if (g_nonnative_cb) {
+                    a7r3_nonnative_cb cb = g_nonnative_cb;
+                    cb(w[0]);
+                }
                 if (g_swallow_keys) {
                     a7r3_ext_dismiss_cb cb = g_ext_cb;
                     g_swallow_keys = 0;
@@ -422,6 +427,7 @@ void a7r3_input_remove(void)
     g_tp_tap_watch = 0;
     g_tap_down = 0;
     g_ev_dial_shield = 0;
+    g_nonnative_cb = NULL;
     a7r3_dsb();
     if (g_get_phy_got) {
         *g_get_phy_got = g_orig_get_phy_got;
@@ -512,6 +518,12 @@ void a7r3_input_flush(void)
 void a7r3_input_set_ext_dismiss_cb(a7r3_ext_dismiss_cb cb)
 {
     g_ext_cb = cb;
+    a7r3_dsb();
+}
+
+void a7r3_input_set_nonnative_cb(a7r3_nonnative_cb cb)
+{
+    g_nonnative_cb = cb;
     a7r3_dsb();
 }
 

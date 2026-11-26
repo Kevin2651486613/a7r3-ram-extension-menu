@@ -1,5 +1,6 @@
 #include "a7r3_pb_focus.h"
 #include "a7r3_fb.h"
+#include "a7r3_input.h"
 #include "a7r3_sys.h"
 
 /* Verified A7R3 v3.10 libmpr.so / libObj.so / viewUnified2.so offsets */
@@ -104,6 +105,10 @@ static unsigned g_last_logged_stat = ~0u;
 static volatile unsigned g_vspb_evt;
 static volatile unsigned g_vspb_seq;
 static unsigned g_last_vspb_seq;
+static int g_last_suppress = -1;
+static volatile unsigned g_nonnative_code;
+static volatile unsigned g_nonnative_seq;
+static unsigned g_last_nonnative_seq;
 
 static volatile unsigned g_cb_seq;
 static unsigned g_last_cb_seq;
@@ -131,6 +136,22 @@ static volatile unsigned g_other_cb_id;
 static volatile unsigned g_other_cb_len;
 static volatile unsigned g_other_cb_seq;
 static unsigned g_last_other_seq;
+
+/* Runs synchronously on the input thread before the native app consumes a
+ * non-navigation key. Arm reticle suppression here so a popup opened by this
+ * key (e.g. the playback delete confirmation) is drawn over a clean screen and
+ * the box is not re-stamped on top of it. */
+static void pb_nonnative_key_cb(unsigned code)
+{
+    if (!g_pb_installed || !g_pb_enabled || !g_in_still_pb || !g_focus_valid)
+        return;
+    if (!a7r3_fb_pb_box_is_active())
+        return;
+    g_nonnative_code = code;
+    a7r3_dsb();
+    g_nonnative_seq++;
+    a7r3_fb_pb_box_suppress();
+}
 
 static unsigned rd16(const uint8_t *p, int big_endian)
 {
@@ -720,6 +741,7 @@ int a7r3_pb_focus_install(void)
     g_pb_installed = 1;
     a7r3_dsb();
 
+    a7r3_input_set_nonnative_cb(pb_nonnative_key_cb);
     a7r3_log_hex("SDK_PB_HOOKS=", 1UL);
     return 0;
 }
@@ -729,6 +751,7 @@ void a7r3_pb_focus_remove(void)
     if (!g_pb_installed)
         return;
 
+    a7r3_input_set_nonnative_cb(NULL);
     g_pb_enabled = 0;
     g_in_still_pb = 0;
     g_focus_valid = 0;
@@ -855,6 +878,21 @@ void a7r3_pb_focus_tick(int md3_open)
     if (g_vspb_seq != g_last_vspb_seq) {
         g_last_vspb_seq = g_vspb_seq;
         a7r3_log_hex("SDK_PB_VSPB=", (unsigned long)g_vspb_evt);
+    }
+
+    if (g_nonnative_seq != g_last_nonnative_seq) {
+        g_last_nonnative_seq = g_nonnative_seq;
+        a7r3_log_hex("SDK_PB_KEY=", (unsigned long)g_nonnative_code);
+    }
+
+    /* Diagnostic: 0x1 = a non-nav key armed reticle suppression,
+     * 0x0 = reticle visible again. Useful to confirm popup suppression. */
+    if (g_pb_enabled) {
+        int sup = a7r3_fb_pb_box_is_suppressed() ? 1 : 0;
+        if (sup != g_last_suppress) {
+            g_last_suppress = sup;
+            a7r3_log_hex("SDK_PB_SUPPRESS=", (unsigned long)sup);
+        }
     }
 
     disp_mode = g_pb_disp_mode;
