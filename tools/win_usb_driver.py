@@ -15,6 +15,7 @@ import ctypes
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,37 @@ _HIDDEN_SUBPROCESS_KW: dict = (
     if sys.platform == "win32"
     else {}
 )
+
+_WDI_ERROR_NAMES: dict[int, str] = {
+    -1: "WDI_ERROR_IO (Input/Output error)",
+    -2: "WDI_ERROR_INVALID_PARAM (Invalid parameter)",
+    -3: "WDI_ERROR_ACCESS (Access denied)",
+    -4: "WDI_ERROR_NO_DEVICE (No such device)",
+    -5: "WDI_ERROR_NOT_FOUND (Not found)",
+    -6: "WDI_ERROR_BUSY (Resource busy)",
+    -7: "WDI_ERROR_TIMEOUT (Operation timed out)",
+    -8: "WDI_ERROR_OVERFLOW (Overflow)",
+    -9: "WDI_ERROR_PENDING_INSTALLATION (Another installation pending)",
+    -10: "WDI_ERROR_INTERRUPTED (Interrupted)",
+    -11: "WDI_ERROR_RESOURCE (Could not allocate resource)",
+    -12: "WDI_ERROR_NOT_SUPPORTED (Not supported)",
+    -13: "WDI_ERROR_EXISTS (Already exists)",
+    -14: "WDI_ERROR_USER_CANCEL (Cancelled by user)",
+    -15: "WDI_ERROR_NEEDS_ADMIN (Needs administrator privileges)",
+    -16: "WDI_ERROR_WOW64 (WOW64 mismatch)",
+    -17: "WDI_ERROR_INF_SYNTAX (Invalid INF syntax)",
+    -18: "WDI_ERROR_CAT_MISSING (Missing CAT file)",
+    -19: "WDI_ERROR_UNSIGNED (Driver unsigned / policy rejected)",
+    -99: "WDI_ERROR_OTHER (Other error)",
+}
+
+
+def _format_wdi_exit(rc: int) -> str:
+    signed = rc - 0x100000000 if rc >= 0x80000000 else rc
+    name = _WDI_ERROR_NAMES.get(signed)
+    if name:
+        return f"{signed} / {name}"
+    return f"{signed} (raw={rc})"
 
 
 def is_windows() -> bool:
@@ -79,6 +111,7 @@ def list_sony_pnp_devices() -> list[dict]:
     if not is_windows():
         return []
     ps_cmd = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
         "Get-PnpDevice | Where-Object { $_.InstanceId -match '^USB\\\\VID_054C&PID_' } "
         "| Select-Object Status,Class,FriendlyName,InstanceId,Service "
         "| ConvertTo-Json -Compress"
@@ -200,19 +233,26 @@ def install_libusb0_for_pid(
     inf_name = f"a7r3_temp_{vid:04x}_{pid:04x}.inf"
     print(f"[*] 正在为 USB 设备 0x{vid:04x}:0x{pid:04x} 安装临时 libusb-win32 驱动...")
     with tempfile.TemporaryDirectory(prefix="a7r3_wdi_") as tmp_dir:
+        tmp_root = Path(tmp_dir).resolve()
+        staged_exe = tmp_root / "wdi-simple.exe"
+        drv_dir = tmp_root / "drv"
+        drv_dir.mkdir(parents=True, exist_ok=True)
+        # Copy content only so Windows MIC Low Mandatory Label / MOTW from the repo/download folder is not inherited.
+        shutil.copyfile(WDI_SIMPLE_EXE, staged_exe)
         cmd = [
-            str(WDI_SIMPLE_EXE),
+            str(staged_exe),
             "--vid", f"0x{vid:04x}",
             "--pid", f"0x{pid:04x}",
             "--type", "1",  # WDI_LIBUSB0 (libusb-win32)
             "--name", device_name,
             "--inf", inf_name,
-            "--dest", tmp_dir,
+            "--dest", str(drv_dir),
             "--timeout", "60000",
-            "--silent",
+            "--log", "0",
         ]
         res = subprocess.run(
             cmd,
+            cwd=str(tmp_root),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -233,7 +273,7 @@ def install_libusb0_for_pid(
     if res.returncode != 0 and not bound:
         detail = (res.stdout + "\n" + res.stderr).strip()
         raise RuntimeError(
-            f"wdi-simple.exe 安装 0x{vid:04x}:0x{pid:04x} 驱动失败 (exit={res.returncode})"
+            f"wdi-simple.exe 安装 0x{vid:04x}:0x{pid:04x} 驱动失败 (exit={_format_wdi_exit(res.returncode)})"
             + (f":\n{detail}" if detail else "")
         )
     if not bound:
@@ -268,7 +308,7 @@ def ensure_camera_driver_for_entry() -> dict:
     if msc_devs:
         d = msc_devs[0]
         if d["service_lower"] != "libusb0":
-            install_libusb0_for_pid(SONY_VID, d["pid"], f"Sony {d['friendly_name'] or 'MSC'} (Temp libusb)")
+            install_libusb0_for_pid(SONY_VID, d["pid"], "Sony ILCE-7RM3 MSC (Temp libusb)")
         else:
             print(f"[*] 大容量存储设备 0x054C:0x{d['pid']:04X} 已使用 libusb-win32。")
         return {"mode": "msc", "pid": d["pid"]}
@@ -376,7 +416,12 @@ class SonyDriverGuard:
         state = snapshot_driver_state()
         save_backup(state)
         self.active = True
-        ensure_camera_driver_for_entry()
+        try:
+            ensure_camera_driver_for_entry()
+        except Exception:
+            if not find_sony_libusb_infs():
+                clear_backup()
+            raise
         return self
 
     def __exit__(self, exc_type, exc, tb):
