@@ -11,6 +11,10 @@ TOOLS_DIR = Path(__file__).resolve().parent
 SDK_DIR = TOOLS_DIR.parent
 SRC_DIR = SDK_DIR / "src"
 BUILD_DIR = SDK_DIR / "build"
+CORE_DIR = SRC_DIR / "core"
+MODULES_DIR = SRC_DIR / "modules"
+ENTRIES_DIR = SRC_DIR / "entries"
+LEGACY_DIR = SRC_DIR / "legacy"  # paused MD3 line (v1.0-md3); not built by default
 
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
@@ -18,18 +22,29 @@ from env_config import load_local_env  # noqa: E402
 
 load_local_env(SDK_DIR)
 
+# Core SDK layer: system calls, framebuffer, drawing, MD3 widgets, input hooks.
 CORE_SRCS = [
-    SRC_DIR / "a7r3_sys.c",
-    SRC_DIR / "a7r3_fb.c",
-    SRC_DIR / "a7r3_draw.c",
-    SRC_DIR / "a7r3_md3.c",
-    SRC_DIR / "a7r3_input.c",
-    SRC_DIR / "a7r3_dual_hud.c",
-    SRC_DIR / "a7r3_pb_focus.c",
-    SRC_DIR / "a7r3_entry_cert.c",
-    SRC_DIR / "a7r3_shutter_sfx.c",
-    SRC_DIR / "a7r3_menu_touch.c",
-    SRC_DIR / "a7r3_native_tab7.c",
+    CORE_DIR / "a7r3_sys.c",
+    CORE_DIR / "a7r3_fb.c",
+    CORE_DIR / "a7r3_draw.c",
+    CORE_DIR / "a7r3_input.c",
+]
+
+# Feature modules layer: each one installs/removes its own hooks symmetrically.
+MODULE_SRCS = [
+    MODULES_DIR / "a7r3_dual_hud.c",
+    MODULES_DIR / "a7r3_pb_focus.c",
+    MODULES_DIR / "a7r3_shutter_sfx.c",
+    MODULES_DIR / "a7r3_menu_touch.c",
+    MODULES_DIR / "a7r3_native_tab7.c",
+]
+
+SDK_SRCS = [*CORE_SRCS, *MODULE_SRCS]
+
+# Archived MD3 line: only linked when the entry file itself lives in src/legacy/.
+LEGACY_SRCS = [
+    LEGACY_DIR / "a7r3_md3.c",
+    LEGACY_DIR / "a7r3_entry_cert.c",
 ]
 
 
@@ -133,14 +148,14 @@ def main() -> int:
     ap.add_argument(
         "--src",
         type=Path,
-        default=SRC_DIR / "demo_addon_menu.c",
-        help="Add-on entry C file (default: src/demo_addon_menu.c)",
+        default=ENTRIES_DIR / "demo_native_tab7.c",
+        help="Add-on entry C file (default: src/entries/demo_native_tab7.c)",
     )
     ap.add_argument(
         "--out",
         type=Path,
-        default=BUILD_DIR / "demo_addon_ram.so",
-        help="Output .so path (default: build/demo_addon_ram.so)",
+        default=BUILD_DIR / "demo_native_tab7_ram.so",
+        help="Output .so path (default: build/demo_native_tab7_ram.so)",
     )
     ap.add_argument(
         "--llvm-bin",
@@ -174,6 +189,20 @@ def main() -> int:
         )
         return 1
 
+    src_path = args.src
+    if not src_path.exists():
+        for cand_dir in (ENTRIES_DIR, LEGACY_DIR):
+            if (cand_dir / src_path.name).is_file():
+                old_path = src_path
+                src_path = cand_dir / src_path.name
+                print(f"[*] Note: resolved entry path {old_path} -> {src_path}")
+                break
+
+    is_legacy = src_path.resolve().parent == LEGACY_DIR.resolve()
+    build_srcs = [*SDK_SRCS, *(LEGACY_SRCS if is_legacy else [])]
+    if is_legacy:
+        print("[!] Warning: building archived MD3 entry from src/legacy/ (paused, not maintained).")
+
     clang = tool_exe(llvm_bin, "clang")
     lld = tool_exe(llvm_bin, "ld.lld")
     readelf = tool_exe(llvm_bin, "llvm-readelf")
@@ -182,7 +211,7 @@ def main() -> int:
     libdl_so = fw_lib_dir / "libdl-2.11.2.so"
     libpthread_so = fw_lib_dir / "libpthread-2.11.2.so"
 
-    for p in (clang, lld, readelf, libc_so, libdl_so, libpthread_so, args.src, *CORE_SRCS):
+    for p in (clang, lld, readelf, libc_so, libdl_so, libpthread_so, src_path, *build_srcs):
         if not p.exists():
             print(f"[!] Missing required file: {p}", file=sys.stderr)
             print(
@@ -192,7 +221,7 @@ def main() -> int:
             )
             return 1
 
-    rc_gen = ensure_generated_labels(args.src)
+    rc_gen = ensure_generated_labels(src_path)
     if rc_gen != 0:
         return rc_gen
     ensure_dual_hud_payload(fw_lib_dir)
@@ -215,6 +244,9 @@ def main() -> int:
         "-fno-asynchronous-unwind-tables",
         "-fvisibility=hidden",
         f"-I{SRC_DIR}",
+        f"-I{CORE_DIR}",
+        f"-I{MODULES_DIR}",
+        *([f"-I{LEGACY_DIR}"] if is_legacy else []),
         "-Wall",
         "-Wextra",
         "-Werror",
@@ -229,8 +261,8 @@ def main() -> int:
         "-l:libpthread-2.11.2.so",
         "-o",
         str(args.out),
-        *[str(s) for s in CORE_SRCS],
-        str(args.src),
+        *[str(s) for s in build_srcs],
+        str(src_path),
     ]
     print("[*] Compiling:", " ".join(cmd))
     res = subprocess.run(cmd, text=True)

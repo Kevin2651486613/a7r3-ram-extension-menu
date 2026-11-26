@@ -33,3 +33,9 @@ extraction/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local Claude Code instructions (not shared)
+CLAUDE.md
+
+# Local experimental R&D probes (never mix flash/non-RAM experiments into main SDK)
+experiments/
