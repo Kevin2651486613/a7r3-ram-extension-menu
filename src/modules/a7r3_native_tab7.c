@@ -23,6 +23,9 @@
 #define VU2_PROC_MGR_INST         0x00a48b10UL
 #define VU2_PROC_MGR_VPTR         0x00867ae0UL
 #define PROC_MGR_VT_COPY_WORDS    28u          /* -2 RTTI/offset words + 26 slots */
+#define VU2_POPUP_OPEN_GOT        0x008cc46cUL
+#define VU2_POPUP_OPEN_REAL       0x0053c8c5UL /* Thumb */
+#define VU2_POPUP_OPEN_FLAG_OFF   0x15ad6u
 
 #define LIBOBJ_TEXT_SETSTR_ID_GOT    0x0121aa9cUL
 #define LIBOBJ_TEXT_SETSTR_ID_REAL   0x005dbe09UL /* Thumb */
@@ -82,6 +85,12 @@
 #define STR_SYN_VOL_HIGH          0x7f010016u
 #define STR_SYN_TOUCH_T           0x7f010017u
 #define STR_SYN_TOUCH_G           0x7f010018u
+#define STR_SYN_SFX_MODE_OFF      0x7f010019u
+#define STR_SYN_SFX_MODE_MECH     0x7f01001au
+#define STR_SYN_SFX_MODE_ESHUT    0x7f01001bu
+#define STR_SYN_SFX_MODE_BOTH     0x7f01001cu
+#define STR_SYN_SFX_SCAN_DONE     0x7f01001du
+#define STR_SYN_SFX_SCAN_OK       0x7f01001eu
 #define STR_SYN_SFX_ITEM_BASE     0x7f010080u
 
 /* Exact 40-byte A7R3 CmnViewSettingNode layout */
@@ -117,6 +126,7 @@ typedef void (*gen_icon_set_bool_fn)(void *icon, int flag);
 typedef void (*res_get_img_size_fn)(unsigned res_id, uint16_t *out_w, uint16_t *out_h);
 typedef void (*text_setstr_id_fn)(void *sprite, unsigned res_id);
 typedef void (*text_setstr_cstr_fn)(void *sprite, const char *utf8);
+typedef int  (*popup_open_fn)(void *popup, void *open_info, void *node);
 
 typedef int (*mgr_get_value_fn)(void *mgr, int proc_id, int *out_val);
 typedef int (*mgr_set_value_fn)(void *mgr, int proc_id, int val);
@@ -159,6 +169,14 @@ static volatile unsigned long *g_text_setstr_got;
 static unsigned long g_orig_text_setstr_got;
 static text_setstr_id_fn g_real_text_setstr_id;
 static text_setstr_cstr_fn g_real_text_setstr_cstr;
+
+static volatile unsigned long *g_popup_open_got;
+static unsigned long g_orig_popup_open_got;
+static popup_open_fn g_real_popup_open;
+static void *volatile g_last_mlt;
+static volatile int g_scan_popup_opening;
+static char g_scan_popup_msg[64];
+static char g_scan_row_msg[32];
 
 static volatile unsigned g_mlt_hits;
 static volatile unsigned g_mgr_hits;
@@ -227,7 +245,7 @@ DECL_TOGGLE_ITEM(g_p1_vol,  STR_SYN_SFX_VOL_T,   STR_SYN_SFX_VOL_G,   PROC_ID_EX
 
 DECL_TOGGLE_ITEM(g_p2_sel,  STR_SYN_SFX_SEL_T,   STR_SYN_SFX_SEL_G,   PROC_ID_EXT_SFX_SELECT)
 DECL_EXEC_ITEM  (g_p2_prv,  STR_SYN_SFX_PREV_T,  STR_SYN_SFX_PREV_G,  PROC_ID_EXT_SFX_PREVIEW)
-DECL_EXEC_ITEM  (g_p2_scan, STR_SYN_SFX_SCAN_T,  STR_SYN_SFX_SCAN_G,  PROC_ID_EXT_SFX_RESCAN)
+DECL_TOGGLE_ITEM(g_p2_scan, STR_SYN_SFX_SCAN_T,  STR_SYN_SFX_SCAN_G,  PROC_ID_EXT_SFX_RESCAN)
 DECL_EXEC_ITEM  (g_p2_rst,  STR_SYN_RESET_T,     STR_SYN_RESET_G,     PROC_ID_EXT_RESET_ALL)
 
 #define DECL_OPT_REC(TAG, STR_T, STR_G, ICON, STAT, VAL) \
@@ -252,26 +270,42 @@ DECL_OPT_REC(g_opt_on_pb,   SONY_STR_ON,  STR_SYN_PB_FOCUS_G,  SONY_ICON_ON,  SO
 DECL_OPT_REC(g_opt_off_pb,  SONY_STR_OFF, STR_SYN_PB_FOCUS_G,  SONY_ICON_OFF, SONY_STAT_OFF, 1u)
 DECL_OPT_REC(g_opt_on_tch,  SONY_STR_ON,  STR_SYN_TOUCH_G,     SONY_ICON_ON,  SONY_STAT_ON,  0u)
 DECL_OPT_REC(g_opt_off_tch, SONY_STR_OFF, STR_SYN_TOUCH_G,     SONY_ICON_OFF, SONY_STAT_OFF, 1u)
-DECL_OPT_REC(g_opt_on_sfx,  SONY_STR_ON,  STR_SYN_SFX_EN_G,    SONY_ICON_ON,  SONY_STAT_ON,  0u)
-DECL_OPT_REC(g_opt_off_sfx, SONY_STR_OFF, STR_SYN_SFX_EN_G,    SONY_ICON_OFF, SONY_STAT_OFF, 1u)
+
+/* Shutter SFX mode options (0=Off, 1=Mech, 2=EShut, 3=Both) */
+DECL_OPT_REC(g_opt_sfx_m0, STR_SYN_SFX_MODE_OFF,   STR_SYN_SFX_EN_G, 0u, 0u, A7R3_SFX_MODE_OFF)
+DECL_OPT_REC(g_opt_sfx_m1, STR_SYN_SFX_MODE_MECH,  STR_SYN_SFX_EN_G, 0u, 0u, A7R3_SFX_MODE_MECH)
+DECL_OPT_REC(g_opt_sfx_m2, STR_SYN_SFX_MODE_ESHUT, STR_SYN_SFX_EN_G, 0u, 0u, A7R3_SFX_MODE_ESHUT)
+DECL_OPT_REC(g_opt_sfx_m3, STR_SYN_SFX_MODE_BOTH,  STR_SYN_SFX_EN_G, 0u, 0u, A7R3_SFX_MODE_BOTH)
+
+/* SD scan completion options (2 children required for ViewSettingMenu Level-2 popup) */
+DECL_OPT_REC(g_opt_scan_done, STR_SYN_SFX_SCAN_DONE, STR_SYN_SFX_SCAN_G, 0u, 0u, 0u)
+DECL_OPT_REC(g_opt_scan_ok,   STR_SYN_SFX_SCAN_OK,   STR_SYN_SFX_SCAN_G, 0u, 0u, 1u)
 
 /* Volume options (0=Low, 1=Mid, 2=High) */
 DECL_OPT_REC(g_opt_vol0, STR_SYN_VOL_LOW,  STR_SYN_SFX_VOL_G, 0u, 0u, 0u)
 DECL_OPT_REC(g_opt_vol1, STR_SYN_VOL_MID,  STR_SYN_SFX_VOL_G, 0u, 0u, 1u)
 DECL_OPT_REC(g_opt_vol2, STR_SYN_VOL_HIGH, STR_SYN_SFX_VOL_G, 0u, 0u, 2u)
 
-/* Sound track dynamic option table (0..18) */
+/* Sound track dynamic option table (0..16) */
 static struct cmn_setting_prop_rec g_sfx_opt_recs[A7R3_SFX_MAX_TOTAL][8];
 static struct cmn_setting_props g_sfx_opt_props[A7R3_SFX_MAX_TOTAL];
 static struct cmn_setting_node g_sfx_opt_nodes[A7R3_SFX_MAX_TOTAL];
 static void *g_sfx_opt_ptrs[A7R3_SFX_MAX_TOTAL];
 
-static struct cmn_setting_node g_opt_nodes_onoff[10];
+static struct cmn_setting_node g_opt_nodes_onoff[8];
 static void *g_ev_opt_ptrs[2]    = { &g_opt_nodes_onoff[0], &g_opt_nodes_onoff[1] };
 static void *g_dh_opt_ptrs[2]    = { &g_opt_nodes_onoff[2], &g_opt_nodes_onoff[3] };
 static void *g_pb_opt_ptrs[2]    = { &g_opt_nodes_onoff[4], &g_opt_nodes_onoff[5] };
 static void *g_tch_opt_ptrs[2]   = { &g_opt_nodes_onoff[6], &g_opt_nodes_onoff[7] };
-static void *g_sfx_en_ptrs[2]  = { &g_opt_nodes_onoff[8], &g_opt_nodes_onoff[9] };
+
+static struct cmn_setting_node g_sfx_mode_nodes[4];
+static void *g_sfx_mode_ptrs[4]  = {
+    &g_sfx_mode_nodes[0], &g_sfx_mode_nodes[1],
+    &g_sfx_mode_nodes[2], &g_sfx_mode_nodes[3]
+};
+
+static struct cmn_setting_node g_scan_opt_nodes[2];
+static void *g_scan_opt_ptrs[2] = { &g_scan_opt_nodes[0], &g_scan_opt_nodes[1] };
 
 static struct cmn_setting_node g_vol_nodes[3];
 static void *g_vol_ptrs[3] = { &g_vol_nodes[0], &g_vol_nodes[1], &g_vol_nodes[2] };
@@ -311,16 +345,22 @@ static void zero_node(struct cmn_setting_node *n, unsigned vptr,
 static void build_native_tree_nodes(unsigned node_vptr)
 {
     unsigned i;
-    static const struct cmn_setting_props *const onoff_props[10] = {
+    static const struct cmn_setting_props *const onoff_props[8] = {
         &g_opt_on_ev_props,  &g_opt_off_ev_props,
         &g_opt_on_dh_props,  &g_opt_off_dh_props,
         &g_opt_on_pb_props,  &g_opt_off_pb_props,
         &g_opt_on_tch_props, &g_opt_off_tch_props,
-        &g_opt_on_sfx_props, &g_opt_off_sfx_props,
     };
 
-    for (i = 0u; i < 10u; i++)
+    for (i = 0u; i < 8u; i++)
         zero_node(&g_opt_nodes_onoff[i], node_vptr, NULL, 0, onoff_props[i]);
+
+    zero_node(&g_sfx_mode_nodes[0], node_vptr, NULL, 0, &g_opt_sfx_m0_props);
+    zero_node(&g_sfx_mode_nodes[1], node_vptr, NULL, 0, &g_opt_sfx_m1_props);
+    zero_node(&g_sfx_mode_nodes[2], node_vptr, NULL, 0, &g_opt_sfx_m2_props);
+    zero_node(&g_sfx_mode_nodes[3], node_vptr, NULL, 0, &g_opt_sfx_m3_props);
+    zero_node(&g_scan_opt_nodes[0], node_vptr, NULL, 0, &g_opt_scan_done_props);
+    zero_node(&g_scan_opt_nodes[1], node_vptr, NULL, 0, &g_opt_scan_ok_props);
 
     zero_node(&g_vol_nodes[0], node_vptr, NULL, 0, &g_opt_vol0_props);
     zero_node(&g_vol_nodes[1], node_vptr, NULL, 0, &g_opt_vol1_props);
@@ -342,16 +382,16 @@ static void build_native_tree_nodes(unsigned node_vptr)
         g_sfx_opt_ptrs[i] = &g_sfx_opt_nodes[i];
     }
 
-    zero_node(&g_p1_nodes[0], node_vptr, g_ev_opt_ptrs,  2, &g_p1_ev_props);
-    zero_node(&g_p1_nodes[1], node_vptr, g_dh_opt_ptrs,  2, &g_p1_dual_props);
-    zero_node(&g_p1_nodes[2], node_vptr, g_pb_opt_ptrs,  2, &g_p1_pb_props);
-    zero_node(&g_p1_nodes[3], node_vptr, g_tch_opt_ptrs, 2, &g_p1_tch_props);
-    zero_node(&g_p1_nodes[4], node_vptr, g_sfx_en_ptrs,  2, &g_p1_sfx_props);
-    zero_node(&g_p1_nodes[5], node_vptr, g_vol_ptrs,     3, &g_p1_vol_props);
+    zero_node(&g_p1_nodes[0], node_vptr, g_ev_opt_ptrs,   2, &g_p1_ev_props);
+    zero_node(&g_p1_nodes[1], node_vptr, g_dh_opt_ptrs,   2, &g_p1_dual_props);
+    zero_node(&g_p1_nodes[2], node_vptr, g_pb_opt_ptrs,   2, &g_p1_pb_props);
+    zero_node(&g_p1_nodes[3], node_vptr, g_tch_opt_ptrs,  2, &g_p1_tch_props);
+    zero_node(&g_p1_nodes[4], node_vptr, g_sfx_mode_ptrs, 4, &g_p1_sfx_props);
+    zero_node(&g_p1_nodes[5], node_vptr, g_vol_ptrs,      3, &g_p1_vol_props);
 
     zero_node(&g_p2_nodes[0], node_vptr, g_sfx_opt_ptrs, A7R3_SFX_MAX_TOTAL, &g_p2_sel_props);
     zero_node(&g_p2_nodes[1], node_vptr, NULL,           0,                  &g_p2_prv_props);
-    zero_node(&g_p2_nodes[2], node_vptr, NULL,           0,                  &g_p2_scan_props);
+    zero_node(&g_p2_nodes[2], node_vptr, g_scan_opt_ptrs, 2,                 &g_p2_scan_props);
     zero_node(&g_p2_nodes[3], node_vptr, NULL,           0,                  &g_p2_rst_props);
 
     zero_node(&g_page_nodes[0], node_vptr, g_p1_ptrs, 6, &g_page1_props);
@@ -363,6 +403,56 @@ static void build_native_tree_nodes(unsigned node_vptr)
 /* =========================================================================
  * Hook 1: TextSprite::SetString(res_id) -> resolve synthetic UTF-8 strings
  * ========================================================================= */
+
+static unsigned append_cstr(char *dst, unsigned pos, unsigned cap, const char *s)
+{
+    while (*s && pos + 1u < cap)
+        dst[pos++] = *s++;
+    dst[pos] = '\0';
+    return pos;
+}
+
+static unsigned append_uint(char *dst, unsigned pos, unsigned cap, unsigned val)
+{
+    static const unsigned p10[10] = {
+        1000000000u, 100000000u, 10000000u, 1000000u, 100000u,
+        10000u, 1000u, 100u, 10u, 1u
+    };
+    int started = 0;
+    unsigned i;
+    for (i = 0u; i < 10u; i++) {
+        unsigned base = p10[i];
+        unsigned d = 0u;
+        while (val >= base) {
+            val -= base;
+            d++;
+        }
+        if (d > 0u || started || i == 9u) {
+            started = 1;
+            if (pos + 1u < cap)
+                dst[pos++] = (char)('0' + d);
+        }
+    }
+    dst[pos] = '\0';
+    return pos;
+}
+
+static void format_scan_strings(int cnt)
+{
+    unsigned ucnt = (cnt < 0) ? 0u : (unsigned)cnt;
+    unsigned pos;
+
+    pos = append_uint(g_scan_row_msg, 0u, (unsigned)sizeof(g_scan_row_msg), ucnt);
+    append_cstr(g_scan_row_msg, pos, (unsigned)sizeof(g_scan_row_msg), " 个音效");
+
+    if (cnt > 0) {
+        pos = append_cstr(g_scan_popup_msg, 0u, (unsigned)sizeof(g_scan_popup_msg), "刷新成功！找到 ");
+        pos = append_uint(g_scan_popup_msg, pos, (unsigned)sizeof(g_scan_popup_msg), ucnt);
+        append_cstr(g_scan_popup_msg, pos, (unsigned)sizeof(g_scan_popup_msg), " 个音效");
+    } else {
+        append_cstr(g_scan_popup_msg, 0u, (unsigned)sizeof(g_scan_popup_msg), "刷新成功（未找到WAV）");
+    }
+}
 
 static const char *lookup_synthetic_utf8(unsigned res_id)
 {
@@ -380,13 +470,17 @@ static const char *lookup_synthetic_utf8(unsigned res_id)
     case STR_SYN_DUAL_HUD_G:
         return a7r3_dual_hud_has_payload()
             ? "在电子水平仪模式下同步显示实时直方图"
-            : "未编入本地 .local.h 载荷，当前为透传模式";
+            : "未加载运行期双显载荷，当前为透传模式";
     case STR_SYN_PB_FOCUS_T:  return "相册显示焦点位置";
     case STR_SYN_PB_FOCUS_G:  return "回放照片时在画面上叠加标注对焦点位置";
     case STR_SYN_TOUCH_T:     return "菜单触摸控制";
     case STR_SYN_TOUCH_G:     return "开启后支持触摸原生菜单大类、翻页、列表、弹窗与白平衡";
-    case STR_SYN_SFX_EN_T:    return "电子快门自定义音效";
-    case STR_SYN_SFX_EN_G:    return "仅在电子快门(静音拍摄)模式下触发自定义快门音";
+    case STR_SYN_SFX_EN_T:    return "快门自定义音效";
+    case STR_SYN_SFX_EN_G:    return "设置自定义快门音在机械快门或电子快门下的触发模式";
+    case STR_SYN_SFX_MODE_OFF:   return "关闭";
+    case STR_SYN_SFX_MODE_MECH:  return "机械快门启用";
+    case STR_SYN_SFX_MODE_ESHUT: return "电子快门启用";
+    case STR_SYN_SFX_MODE_BOTH:  return "均启用";
     case STR_SYN_SFX_VOL_T:   return "快门音效音量";
     case STR_SYN_SFX_VOL_G:   return "调节机身扬声器播放自定义快门音的音量";
     case STR_SYN_SFX_PREV_T:  return "试听当前快门音效";
@@ -395,6 +489,22 @@ static const char *lookup_synthetic_utf8(unsigned res_id)
     case STR_SYN_SFX_SEL_G:   return "选择内置或内存卡 /SHUTTER_SFX/ 目录中的 WAV 音效";
     case STR_SYN_SFX_SCAN_T:  return "刷新SD卡音效列表";
     case STR_SYN_SFX_SCAN_G:  return "重新扫描卡1/卡2 /SHUTTER_SFX/ 下的 PCM WAV 文件";
+    case STR_SYN_SFX_SCAN_DONE: {
+        int in_popup = g_scan_popup_opening;
+        if (!in_popup && g_last_mlt &&
+            a7r3_pm_readable(g_last_mlt, VU2_POPUP_OPEN_FLAG_OFF + 4u) &&
+            *((const uint8_t *)g_last_mlt + VU2_POPUP_OPEN_FLAG_OFF) == 1u) {
+            in_popup = 1;
+        }
+        if (in_popup) {
+            if (g_scan_popup_msg[0] == '\0')
+                format_scan_strings(a7r3_shutter_sfx_sd_count());
+            return g_scan_popup_msg;
+        }
+        format_scan_strings(a7r3_shutter_sfx_sd_count());
+        return g_scan_row_msg;
+    }
+    case STR_SYN_SFX_SCAN_OK: return "确定";
     case STR_SYN_RESET_T:     return "恢复全部默认设置";
     case STR_SYN_RESET_G:     return "将拓展菜单所有增强开关与音效选项恢复为默认关闭";
     case STR_SYN_VOL_LOW:     return "低";
@@ -402,6 +512,29 @@ static const char *lookup_synthetic_utf8(unsigned res_id)
     case STR_SYN_VOL_HIGH:    return "高";
     default:                  return NULL;
     }
+}
+
+__attribute__((noinline))
+static int tab7_popup_open_hook(void *popup, void *open_info, void *node)
+{
+    a7r3_log_hex("SDK_TAB7_POPUP_HIT=",
+                 (unsigned long)(node == &g_p2_nodes[2] ? 2u : (node == &g_p2_nodes[0] ? 1u : 0u)));
+    if (node == &g_p2_nodes[2]) {
+        int cnt = a7r3_shutter_sfx_rescan_sd_sync();
+        int rc;
+        format_scan_strings(cnt);
+        g_scan_popup_opening = 1;
+        a7r3_dsb();
+        rc = g_real_popup_open(popup, open_info, node);
+        g_scan_popup_opening = 0;
+        a7r3_dsb();
+        return rc;
+    }
+    if (node == &g_p2_nodes[0] && a7r3_shutter_sfx_sd_count() == 0) {
+        int cnt = a7r3_shutter_sfx_rescan_sd_sync();
+        format_scan_strings(cnt);
+    }
+    return g_real_popup_open(popup, open_info, node);
 }
 
 __attribute__((noinline))
@@ -426,6 +559,8 @@ __attribute__((noinline))
 static int tab7_mlt_update_hook(void *self)
 {
     int rc = g_real_mlt_update(self);
+    if (self)
+        g_last_mlt = self;
     if (self && g_mlt_place_wgt) {
         int tab_cnt = *(const int *)((const uint8_t *)self + VU2_MLT_TAB_COUNT_OFF);
         if (g_mlt_get_row_cnt) {
@@ -502,13 +637,16 @@ static int mgr_get_value_hook(void *mgr, int proc_id, int *out_val)
             *out_val = a7r3_menu_touch_get_enabled() ? 0 : 1;
             return 1;
         case PROC_ID_EXT_SFX_ENABLE:
-            *out_val = a7r3_shutter_sfx_get_enabled() ? 0 : 1;
+            *out_val = a7r3_shutter_sfx_get_mode();
             return 1;
         case PROC_ID_EXT_SFX_VOL:
             *out_val = a7r3_shutter_sfx_get_volume();
             return 1;
         case PROC_ID_EXT_SFX_SELECT:
             *out_val = a7r3_shutter_sfx_get_selected();
+            return 1;
+        case PROC_ID_EXT_SFX_RESCAN:
+            *out_val = 0;
             return 1;
         default:
             *out_val = 0;
@@ -538,13 +676,21 @@ static int mgr_set_value_hook(void *mgr, int proc_id, int val)
             a7r3_menu_touch_set_enabled(val == 0 ? 1 : 0);
             return 1;
         case PROC_ID_EXT_SFX_ENABLE:
-            a7r3_shutter_sfx_set_enabled(val == 0 ? 1 : 0);
+            a7r3_shutter_sfx_set_mode(val);
             return 1;
         case PROC_ID_EXT_SFX_VOL:
             a7r3_shutter_sfx_set_volume(val);
             return 1;
         case PROC_ID_EXT_SFX_SELECT:
-            a7r3_shutter_sfx_select(val);
+            if (val >= a7r3_shutter_sfx_count()) {
+                int cnt = a7r3_shutter_sfx_rescan_sd_sync();
+                format_scan_strings(cnt);
+                a7r3_shutter_sfx_select(0);
+            } else {
+                a7r3_shutter_sfx_select(val);
+            }
+            return 1;
+        case PROC_ID_EXT_SFX_RESCAN:
             return 1;
         default:
             return 1;
@@ -586,7 +732,8 @@ static int mgr_is_disable_val_hook(void *mgr, int proc_id, int val)
 {
     if (proc_id == PROC_ID_EXT_SFX_SELECT) {
         int cnt = a7r3_shutter_sfx_count();
-        return (val >= 0 && val < cnt) ? 0 : 1;
+        int vis = (cnt < 2) ? 2 : cnt;
+        return (val >= 0 && val < vis) ? 0 : 1;
     }
     if (is_ext_proc(proc_id))
         return 0;
@@ -746,6 +893,26 @@ int a7r3_native_tab7_install(void)
     g_mlt_update_slot = mlt_slot;
     a7r3_log_hex("SDK_TAB7_MLT_HOOK=", 1UL);
 
+    /* 4b. Hook PAS_MenuListPopup::openMenuPopup GOT in viewUnified2.so */
+    {
+        volatile unsigned long *pop_slot =
+            (volatile unsigned long *)(vu2_base + VU2_POPUP_OPEN_GOT);
+        if (!a7r3_pm_writable((const void *)pop_slot, 4u) ||
+            *pop_slot != (vu2_base + VU2_POPUP_OPEN_REAL)) {
+            a7r3_log_hex("SDK_TAB7_POPUP_MISMATCH=",
+                         a7r3_pm_readable((const void *)pop_slot, 4u) ? *pop_slot : 0UL);
+            a7r3_native_tab7_remove();
+            return -6;
+        }
+        g_orig_popup_open_got = *pop_slot;
+        g_real_popup_open = (popup_open_fn)(uintptr_t)(vu2_base + VU2_POPUP_OPEN_REAL);
+        a7r3_dsb();
+        *pop_slot = (unsigned long)(uintptr_t)&tab7_popup_open_hook;
+        a7r3_dsb();
+        g_popup_open_got = pop_slot;
+        a7r3_log_hex("SDK_TAB7_POPUP_HOOK=", 1UL);
+    }
+
     /* 5. Build native sub-tree & extend menu root from 6 to 7 tabs */
     build_native_tree_nodes(root->vptr);
     for (i = 0u; i < 6u; i++)
@@ -779,6 +946,13 @@ void a7r3_native_tab7_remove(void)
         g_root_node = NULL;
         g_orig_root_children = NULL;
     }
+
+    if (g_popup_open_got) {
+        *g_popup_open_got = g_orig_popup_open_got;
+        g_popup_open_got = NULL;
+    }
+    g_last_mlt = NULL;
+    g_scan_popup_opening = 0;
 
     if (g_mlt_update_slot) {
         *g_mlt_update_slot = g_orig_mlt_update;

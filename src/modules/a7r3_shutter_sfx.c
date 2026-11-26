@@ -46,6 +46,9 @@
 #define FSYS_TNTFS_FOPEN_GOT     0x0006b698UL
 #define FSYS_TNTFS_FREAD_GOT     0x0006b8b8UL
 #define FSYS_TNTFS_FCLOSE_GOT    0x0006b7e4UL
+#define FSYS_TNTFS_OPENDIR_GOT   0x0006bf0cUL
+#define FSYS_TNTFS_READDIR_GOT   0x0006b914UL
+#define FSYS_TNTFS_CLOSEDIR_GOT  0x0006b9a0UL
 
 #define ADF_UNIT_ID              0x2bu
 #define APP_UNIT_TYPE            0x00070817u
@@ -124,6 +127,9 @@ typedef int (*pf2_fclose_fn)(void *fp);
 typedef void *(*tntfs_fopen_fn)(const char *path, const char *mode);
 typedef int (*tntfs_fread_fn)(void *fp, void *buf, int len);
 typedef int (*tntfs_fclose_fn)(void *fp);
+typedef void *(*tntfs_opendir_fn)(const char *path);
+typedef const void *(*tntfs_readdir_fn)(void *dir);
+typedef int (*tntfs_closedir_fn)(void *dir);
 
 struct dmm_alc_unit {
     uint16_t flag;
@@ -142,7 +148,7 @@ struct sfx_sd_entry {
     uint32_t file_size;
 };
 
-static const uint8_t g_builtin_kinds[A7R3_SFX_BUILTIN_CNT] = { 3u, 7u, 1u };
+static const uint8_t g_builtin_kinds[A7R3_SFX_BUILTIN_CNT] = { 3u };
 static uint8_t g_vol_bytes[3] = { 2u, 5u, 7u };
 
 static uint8_t g_wav_raw[WAV_RAW_CAP] __attribute__((aligned(16)));
@@ -194,9 +200,12 @@ static pf2_fclose_fn g_pf2_fclose;
 static tntfs_fopen_fn g_tntfs_fopen;
 static tntfs_fread_fn g_tntfs_fread;
 static tntfs_fclose_fn g_tntfs_fclose;
+static tntfs_opendir_fn g_tntfs_opendir;
+static tntfs_readdir_fn g_tntfs_readdir;
+static tntfs_closedir_fn g_tntfs_closedir;
 
 static volatile int g_sfx_installed;
-static volatile int g_sfx_enabled;
+static volatile int g_sfx_mode;
 static volatile int g_silent_shutter_on;
 static int g_logged_eshut = -1;
 static int g_logged_eshut_val = -1;
@@ -209,6 +218,7 @@ static volatile unsigned g_skipped_mech_seq;
 static volatile unsigned g_preview_seq;
 static volatile unsigned g_load_seq;
 static volatile unsigned g_rescan_seq;
+static volatile unsigned g_rescan_done_seq;
 static volatile unsigned g_prewarm_seq;
 static volatile unsigned g_wake_seq;
 static volatile int g_sfx_stop;
@@ -327,14 +337,26 @@ static uint32_t read_got(unsigned long base, unsigned long got_off)
     return *slot;
 }
 
+static int sfx_should_trigger(int mode, int is_eshut)
+{
+    if (mode == A7R3_SFX_MODE_MECH)
+        return is_eshut ? 0 : 1;
+    if (mode == A7R3_SFX_MODE_ESHUT)
+        return is_eshut ? 1 : 0;
+    if (mode == A7R3_SFX_MODE_BOTH)
+        return 1;
+    return 0;
+}
+
 __attribute__((noinline))
 static int parse_reccnt_hook(void *self, void *msg)
 {
-    if (g_sfx_enabled && msg && g_msg_get_id && g_msg_get_prm) {
+    int mode = g_sfx_mode;
+    if (mode != A7R3_SFX_MODE_OFF && msg && g_msg_get_id && g_msg_get_prm) {
         if (g_msg_get_id(msg) == 0x1003u) {
             const void *sub = g_msg_get_prm(msg, 0x1003u, 0x29u);
             if (sub && a7r3_pm_readable(sub, 4u) && g_msg_get_id(sub) == 0x1003u) {
-                if (g_silent_shutter_on) {
+                if (sfx_should_trigger(mode, g_silent_shutter_on)) {
                     g_trigger_seq++;
                     wake_sfx_worker();
                 } else {
@@ -942,6 +964,56 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
             }
             rc = g_prfile_fsnext(drv, g_find_info);
         }
+    } else if (g_tntfs_opendir && g_tntfs_readdir && g_tntfs_closedir) {
+        char dir_path[32];
+        void *dir;
+        int dlen = 0;
+
+        dir_path[dlen++] = drive;
+        dir_path[dlen++] = ':';
+        dir_path[dlen++] = '\\';
+        {
+            unsigned i = 0;
+            while (subdir[i] && dlen + 2 < (int)sizeof(dir_path))
+                dir_path[dlen++] = subdir[i++];
+        }
+        dir_path[dlen] = '\0';
+
+        dir = g_tntfs_opendir(dir_path);
+        if (!dir && subdir[0] == 'S' && subdir[1] == 'H') {
+            str_copy_cap(dir_path + 3, "shutter_sfx", sizeof(dir_path) - 3u);
+            dir = g_tntfs_opendir(dir_path);
+        }
+        a7r3_log_hex("SDK_SFX_SCAN_RC=",
+                     ((unsigned long)(uint8_t)drive << 24) |
+                     ((unsigned long)fs_type << 16) |
+                     (dir ? 0UL : 2UL));
+        if (dir) {
+            while (*io_cnt < A7R3_SFX_MAX_SD_FILES) {
+                const uint8_t *ent = (const uint8_t *)g_tntfs_readdir(dir);
+                uint8_t d_type;
+                const char *fname;
+                if (!ent || !a7r3_pm_readable(ent, 0x14u))
+                    break;
+                d_type = ent[0x12];
+                fname = (const char *)(ent + 0x13);
+                if (d_type != 4u && fname[0] != '\0' && fname[0] != '.' &&
+                    (ends_with_ci4(fname, ".wav") || ends_with_ci4(fname, ".bin"))) {
+                    struct sfx_sd_entry *e = &g_sd_files[*io_cnt];
+                    unsigned k = 0;
+                    str_copy_cap(e->path, dir_path, sizeof(e->path));
+                    k = str_len(e->path);
+                    if (k + 2u < sizeof(e->path)) {
+                        e->path[k++] = '\\';
+                        str_copy_cap(e->path + k, fname, sizeof(e->path) - k);
+                    }
+                    str_copy_cap(e->name, fname, sizeof(e->name));
+                    e->file_size = 0u;
+                    (*io_cnt)++;
+                }
+            }
+            g_tntfs_closedir(dir);
+        }
     } else if (subdir[0] == 'S' && subdir[1] == 'H') {
         a7r3_log_hex("SDK_SFX_SCAN_RC=",
                      ((unsigned long)(uint8_t)drive << 24) |
@@ -954,7 +1026,7 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
 
 static void do_rescan_sd(void)
 {
-    unsigned drives;
+    unsigned drives = 0u;
     int cnt = 0;
     int i;
 
@@ -963,6 +1035,8 @@ static void do_rescan_sd(void)
 
     drives = g_fsys_mount_drives();
     a7r3_log_hex("SDK_SFX_DRIVES=", (unsigned long)drives);
+    if (drives == 0u)
+        drives = 0x7u;
     for (i = 0; i < 26 && cnt < A7R3_SFX_MAX_SD_FILES; i++) {
         if (!(drives & (1u << (unsigned)i)))
             continue;
@@ -973,6 +1047,9 @@ static void do_rescan_sd(void)
     g_loaded_sd_idx = -1;
     if (g_selected_idx >= A7R3_SFX_BUILTIN_CNT + cnt)
         g_selected_idx = 0;
+    a7r3_dsb();
+    g_rescan_done_seq = g_rescan_seq;
+    a7r3_dsb();
     a7r3_log_hex("SDK_SFX_SD_CNT=", (unsigned long)cnt);
 }
 
@@ -1029,6 +1106,8 @@ static void *sfx_worker(void *arg)
         if (g_rescan_seq != last_rescan) {
             last_rescan = g_rescan_seq;
             do_rescan_sd();
+            g_rescan_done_seq = last_rescan;
+            a7r3_dsb();
         }
         if (g_load_seq != last_load) {
             last_load = g_load_seq;
@@ -1039,7 +1118,7 @@ static void *sfx_worker(void *arg)
             last_trig = g_trigger_seq;
             if (last_trig <= 5u)
                 a7r3_log_hex("SDK_SFX_TRIG=", (unsigned long)last_trig);
-            if (g_sfx_enabled && g_silent_shutter_on)
+            if (sfx_should_trigger(g_sfx_mode, g_silent_shutter_on))
                 play_current_sound(0, last_trig);
         }
         if (g_skipped_mech_seq != last_mech) {
@@ -1053,7 +1132,7 @@ static void *sfx_worker(void *arg)
         }
         if (g_prewarm_seq != last_prewarm) {
             last_prewarm = g_prewarm_seq;
-            if (g_sfx_enabled)
+            if (g_sfx_mode != A7R3_SFX_MODE_OFF)
                 prewarm_adf();
         }
 
@@ -1135,6 +1214,9 @@ int a7r3_shutter_sfx_install(void)
     g_tntfs_fopen = (tntfs_fopen_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_FOPEN_GOT);
     g_tntfs_fread = (tntfs_fread_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_FREAD_GOT);
     g_tntfs_fclose = (tntfs_fclose_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_FCLOSE_GOT);
+    g_tntfs_opendir = (tntfs_opendir_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_OPENDIR_GOT);
+    g_tntfs_readdir = (tntfs_readdir_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_READDIR_GOT);
+    g_tntfs_closedir = (tntfs_closedir_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_CLOSEDIR_GOT);
 
     slot = (volatile unsigned long *)(g_obj_base + LIBOBJ_RECCNT_PARSE_SLOT);
     if (!a7r3_pm_writable((const void *)slot, 4u)) {
@@ -1169,7 +1251,7 @@ void a7r3_shutter_sfx_uninstall(void)
     if (!g_sfx_installed)
         return;
 
-    g_sfx_enabled = 0;
+    g_sfx_mode = A7R3_SFX_MODE_OFF;
     g_sfx_stop = 1;
     wake_sfx_worker();
 
@@ -1186,11 +1268,13 @@ void a7r3_shutter_sfx_uninstall(void)
     g_sfx_installed = 0;
 }
 
-void a7r3_shutter_sfx_set_enabled(int on)
+void a7r3_shutter_sfx_set_mode(int mode)
 {
-    int val = on ? 1 : 0;
-    g_sfx_enabled = val;
-    if (val) {
+    if (mode < A7R3_SFX_MODE_OFF || mode > A7R3_SFX_MODE_BOTH)
+        mode = A7R3_SFX_MODE_OFF;
+    g_sfx_mode = mode;
+    a7r3_log_hex("SDK_SFX_MODE=", (unsigned long)(unsigned)mode);
+    if (mode != A7R3_SFX_MODE_OFF) {
         g_prewarm_seq++;
         wake_sfx_worker();
     } else {
@@ -1198,9 +1282,19 @@ void a7r3_shutter_sfx_set_enabled(int on)
     }
 }
 
+int a7r3_shutter_sfx_get_mode(void)
+{
+    return g_sfx_mode;
+}
+
+void a7r3_shutter_sfx_set_enabled(int on)
+{
+    a7r3_shutter_sfx_set_mode(on ? A7R3_SFX_MODE_ESHUT : A7R3_SFX_MODE_OFF);
+}
+
 int a7r3_shutter_sfx_get_enabled(void)
 {
-    return g_sfx_enabled;
+    return g_sfx_mode != A7R3_SFX_MODE_OFF;
 }
 
 int a7r3_shutter_sfx_is_eshutter(void)
@@ -1218,6 +1312,24 @@ int a7r3_shutter_sfx_rescan_sd(void)
 {
     g_rescan_seq++;
     wake_sfx_worker();
+    return g_sd_count;
+}
+
+int a7r3_shutter_sfx_rescan_sd_sync(void)
+{
+    unsigned target;
+    int spin;
+    if (!g_sfx_thread_running)
+        return g_sd_count;
+    target = g_rescan_seq + 1u;
+    g_rescan_seq = target;
+    wake_sfx_worker();
+    for (spin = 0; spin < 300; spin++) {
+        a7r3_dsb();
+        if ((int)(g_rescan_done_seq - target) >= 0 || !g_sfx_thread_running)
+            break;
+        a7r3_nanosleep_ms(5u);
+    }
     return g_sd_count;
 }
 
@@ -1253,9 +1365,13 @@ int a7r3_shutter_sfx_select(int idx)
 
 const char *a7r3_shutter_sfx_name(int idx)
 {
-    if (idx < A7R3_SFX_BUILTIN_CNT || idx >= A7R3_SFX_BUILTIN_CNT + g_sd_count)
-        return NULL;
-    return g_sd_files[idx - A7R3_SFX_BUILTIN_CNT].name;
+    if (idx == 0)
+        return "内置测试音效";
+    if (idx >= A7R3_SFX_BUILTIN_CNT && idx < A7R3_SFX_BUILTIN_CNT + g_sd_count)
+        return g_sd_files[idx - A7R3_SFX_BUILTIN_CNT].name;
+    if (idx == A7R3_SFX_BUILTIN_CNT && g_sd_count == 0)
+        return "SD卡暂无WAV (点击刷新)";
+    return "";
 }
 
 void a7r3_shutter_sfx_set_volume(int level)
@@ -1282,7 +1398,7 @@ void a7r3_shutter_sfx_preview(void)
 
 void a7r3_shutter_sfx_reset(void)
 {
-    g_sfx_enabled = 0;
+    g_sfx_mode = A7R3_SFX_MODE_OFF;
     g_selected_idx = 0;
     g_vol_level = 1;
     a7r3_dsb();
