@@ -1,0 +1,53 @@
+name: 功能提案 / 二次开发讨论
+description: 提出新功能、适配或架构改进建议
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **风险提示**：本项目可能导致相机变砖、硬件损坏、数据丢失与保修失效，风险由使用者自担，详见 [DISCLAIMER.md](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/blob/main/DISCLAIMER.md)。
+        >
+        > **当前仅持续维护 Tab7（Route A1 原生第 7 大类）主线；旧版 MD3（`v1.0-md3`）已暂停开发，暂不受理 MD3 新功能与维护请求。**
+        >
+        > 提案必须遵守 [CONTRIBUTING.md](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/blob/main/CONTRIBUTING.md) 的安全红线：纯内存、零 `.text` 补丁、对称还原、零专有资产。
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 问题与动机
+      description: 你希望解决什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: 设计思路
+      description: 计划修改的层级（`src/core/`、`src/modules/`、`src/entries/`、`tools/`）、钩子方式与卸载还原方案
+    validations:
+      required: true
+  - type: textarea
+    id: feasibility
+    attributes:
+      label: 纯内存与零 `.text` 补丁可行性
+      description: 说明如何保证不写 Flash、不修改 `.text`，以及是否需要新的固件偏移（只需写出十六进制偏移笔记，不要上传固件）
+    validations:
+      required: true
+  - type: dropdown
+    id: pr
+    attributes:
+      label: 你是否愿意提交 PR？
+      options:
+        - 愿意，我会提交 PR
+        - 需要协助，希望先讨论
+        - 仅提出建议
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认事项
+      options:
+        - label: 我已阅读 DISCLAIMER.md 并理解使用风险由我自担
+          required: true
+        - label: 本提案不涉及提交 Sony 固件、`.so` 或其他专有文件
+          required: true

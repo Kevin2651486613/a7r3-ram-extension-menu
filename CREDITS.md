@@ -11,6 +11,7 @@
 | [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) (`pmca` / `libusb`) | MIT | USB Service Mode 握手、终端认证与 `/tmp_bt` 文件读写通道 |
 | [LLVM / Clang + LLD](https://llvm.org/) (`clang` / `ld.lld` / `llvm-readelf`) | Apache-2.0 with LLVM-exception | 交叉编译 ARMv7-A freestanding `.so` 与远程注入 ELF |
 | [Keystone Engine](https://www.keystone-engine.org/) (`keystone-engine`) | GPLv2 | 在宿主机端汇编远程 ARM ELF 工具（`tools/ram_loader/`，构建产物与注入流程独立于上游工具许可） |
+| [pbatard/libwdi](https://github.com/pbatard/libwdi) (`wdi-simple.exe`) & [libusb-win32](https://github.com/mcuee/libusb-win32) | LGPL-3.0 / GPL-3.0 | Windows 端独立子进程命令行助手（`tools/win_driver/wdi-simple.exe`），用于在注入前临时绑定 `libusb-win32` 并在结束后卸载还原原生 `USBSTOR` |
 | [Pillow](https://python-pillow.org/) | HPND | `tools/gen_md3_assets.py` 光栅化生成 4-bit 抗锯齿中文字模头文件 |
 | [FFmpeg](https://ffmpeg.org/) | LGPL / GPL | 将外部音频批量转换为机内支持的 24 kHz 单声道 16-bit PCM `.wav` |
 

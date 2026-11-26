@@ -14,7 +14,8 @@
 | 远程注入与跳板 | **Keystone Engine** (`keystone-engine`) + **内置 MIT `tools/ram_loader/`** | 自包含生成 ARM `dlopen` 跳板、`/proc/<pid>/mem` (`ptrace` 自动回退) 写入器、流式十六进制读取器与终端命令封装 |
 | USB 通信层 | **[ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE)** (`pmca` + `pyusb` / `libusb`) | 通过 USB Service Mode 与相机建立 BusyBox 终端并传输文件至 `/tmp_bt` |
 | 音频转码 | **FFmpeg** (`ffmpeg`) | 将任意音乐/快门声转为机内兼容的 24 kHz 单声道 16-bit 未压缩 PCM `.wav` |
-| Windows 启动器 | [`启动拓展菜单工具.bat`](../启动拓展菜单工具.bat) | 自动检测 `python` / `py -3` 并以 UTF-8 启动控制台工具 |
+| Windows 自动驱动工具 | `tools/win_usb_driver.py` + `tools/win_driver/wdi-simple.exe` (`pbatard/libwdi` LGPL-3.0) | Windows 端自动为 `054C:0BFF` / `0336` 临时安装 `libusb-win32`，注入完成后自动全部卸载恢复原生 `USBSTOR`（无需手动 Zadig） |
+| Windows 启动器 | [`一键注入拓展菜单.bat`](../一键注入拓展菜单.bat) / [`启动拓展菜单工具.bat`](../启动拓展菜单工具.bat) | 自动 UAC 提权并优先识别 `.venv` / `python` / `py -3` 一键运行全流程或进入交互控制台 |
 
 ---
 
@@ -80,20 +81,17 @@ cp .env.example .env.local
    - `-fuse-ld=ld.lld -Wl,-z,now -Wl,-Bsymbolic -Wl,-z,nocombreloc -Wl,--no-as-needed`
    - **必须加 `-Wl,-z,nocombreloc`**：`ld.lld` 默认合并重定位并生成 `DT_RELCOUNT`，而 A7R3 固件的 glibc 2.11.2 动态链接器在处理带 `DT_RELCOUNT` 的 `BIND_NOW` 共享库时会直接崩溃。`build_addon.py` 在链接后会自动检查 `llvm-readelf -d` 是否误输出 `(RELCOUNT)`。
 3. **禁止引入隐式运行时/除法辅助符号**：
-   - 由于启用了 `-nostdlib` 且未链接 `libgcc`，所有 32/64 位整数除法不得在高频/可避开路径产生 `__aeabi_uidiv` / `__aeabi_idiv` / `__aeabi_uldivmod` 等未解析符号（例如 [a7r3_shutter_sfx.c](../src/a7r3_shutter_sfx.c) 与 [a7r3_pb_focus.c](../src/a7r3_pb_focus.c) 中专门实现了按位整型除法 `u64_div_u32` 和 `udiv32`）。
+   - 由于启用了 `-nostdlib` 且未链接 `libgcc`，所有 32/64 位整数除法不得在高频/可避开路径产生 `__aeabi_uidiv` / `__aeabi_idiv` / `__aeabi_uldivmod` 等未解析符号（例如 [a7r3_shutter_sfx.c](../src/modules/a7r3_shutter_sfx.c) 与 [a7r3_pb_focus.c](../src/modules/a7r3_pb_focus.c) 中专门实现了按位整型除法 `u64_div_u32` 和 `udiv32`）。
    - `build_addon.py` 会交叉比对 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so` 的导出表；实机产物的 `UND` 符号应仅允许 `WEAK pthread_create`。
 
 ### 常用构建命令
 
 ```powershell
 # 编译原生第 7 大类 + 纯内存菜单触摸版（Route A1，当前主线推荐）
-python tools/build_addon.py --src src/demo_native_tab7.c --out build/demo_native_tab7_ram.so
+python tools/build_addon.py --src src/entries/demo_native_tab7.c --out build/demo_native_tab7_ram.so
 
-# 编译 MD3 自绘菜单完整版（v1.0-md3 路线：原生设置第 7 页「拓展菜单」入口）
-python tools/build_addon.py --src src/demo_cert_entry.c --out build/demo_cert_entry_ram.so
-
-# 如修改了 MD3 中文菜单文本（SPECS），重新生成 md3_demo_labels.h
-python tools/gen_md3_assets.py
+# （已暂停开发的归档路线，仅供参考）编译 MD3 自绘菜单：需额外 `pip install Pillow`，并运行 python tools/gen_md3_assets.py
+# python tools/build_addon.py --src src/legacy/demo_cert_entry.c --out build/demo_cert_entry_ram.so
 
 # 手动从本地 viewStlrec.uxc 或已连接相机只读生成受忽略的本地 Dual-HUD 载荷
 python tools/gen_dual_hud_payload.py --from-camera
@@ -110,13 +108,15 @@ python tools/gen_dual_hud_payload.py --from-camera
 python tools/a7r3_addon_console.py
 
 # 命令行一键模式：
-python tools/a7r3_addon_console.py check    # 离线检查 Python/环境变量/工具链/.so 边界有效性（无需连接相机）
-python tools/a7r3_addon_console.py build    # 交叉编译当前默认产物 demo_native_tab7_ram.so
-python tools/a7r3_addon_console.py deploy   # 安全停掉旧实例 + 边界检查 + 部署当前 .so + 检查 10 项钩子
-python tools/a7r3_addon_console.py update   # 先重新编译再热部署（开发迭代最常用）
-python tools/a7r3_addon_console.py status   # 查看 PID、10 项钩子状态与最近 25 行 /tmp_bt/addon.log
-python tools/a7r3_addon_console.py open     # 兼容保留（主要供 MD3 版弹窗遥控测试；原生 Tab 7 按 MENU 即见）
-python tools/a7r3_addon_console.py quit     # 安全还原所有 GOT/vptr 钩子并退出工作线程
+python tools/a7r3_addon_console.py one-click       # Windows 全自动闭环（双击 一键注入拓展菜单.bat 等效）：自动换驱动 + 自动初始化/编译 + 纯 RAM 部署 + 自动换回原生 USBSTOR
+python tools/a7r3_addon_console.py restore-driver  # 手动清除全部 Sony 临时 libusb-win32 驱动包并恢复原生 USBSTOR
+python tools/a7r3_addon_console.py check           # 离线检查 Python/环境变量/工具链/.so/驱动工具状态（无需连接相机）
+python tools/a7r3_addon_console.py build           # 交叉编译当前默认产物 demo_native_tab7_ram.so
+python tools/a7r3_addon_console.py deploy          # 安全停掉旧实例 + 边界检查 + 部署当前 .so + 检查 10 项钩子（不自动切换驱动）
+python tools/a7r3_addon_console.py update          # 先重新编译再热部署（不自动切换驱动）
+python tools/a7r3_addon_console.py status          # 查看 PID、10 项钩子状态与最近 25 行 /tmp_bt/addon.log
+python tools/a7r3_addon_console.py open            # 兼容保留（主要供 MD3 版弹窗遥控测试；原生 Tab 7 按 MENU 即见）
+python tools/a7r3_addon_console.py quit            # 安全还原所有 GOT/vptr 钩子并退出工作线程
 python tools/a7r3_addon_console.py gen-payload --from-camera  # 从已连接相机生成本地 Dual-HUD 载荷
 python tools/a7r3_addon_console.py init-camera                # 一次性从相机只读初始化 /lib 三件套 + Dual-HUD 载荷
 ```

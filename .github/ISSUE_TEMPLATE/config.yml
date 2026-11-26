@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 免责声明（相机变砖与硬件风险）
+    url: https://github.com/Kevin2651486613/a7r3-ram-extension-menu/blob/main/DISCLAIMER.md
+    about: 使用或二次开发前请先阅读
+  - name: 贡献指南（Issue 与 PR 规范）
+    url: https://github.com/Kevin2651486613/a7r3-ram-extension-menu/blob/main/CONTRIBUTING.md
+    about: 提交 Issue 或 PR 前请阅读
+  - name: 架构设计与实现思路
+    url: https://github.com/Kevin2651486613/a7r3-ram-extension-menu/blob/main/docs/ARCHITECTURE.md
+    about: 二次开发参考

@@ -1,0 +1,72 @@
+name: Bug 反馈
+description: 报告构建、注入、卸载或功能异常
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **风险提示**：本项目可能导致相机变砖、硬件损坏、数据丢失与保修失效，风险由使用者自担，详见 [DISCLAIMER.md](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/blob/main/DISCLAIMER.md)。
+        >
+        > **当前仅持续维护 Tab7（Route A1 原生第 7 大类）主线；旧版 MD3（`v1.0-md3`）已暂停开发，暂不受理 MD3 新功能与维护请求。**
+        >
+        > **请勿上传** Sony 固件、`.so` 库、`*.local.h`、`.env.local`，也不要贴出含个人路径的未脱敏日志。
+        >
+        > 提交前请先阅读 [CONTRIBUTING.md](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/blob/main/CONTRIBUTING.md)，并查阅 README「常见报错与排查定位」。
+  - type: input
+    id: camera
+    attributes:
+      label: 相机型号与固件版本
+      description: 例如 ILCE-7RM3，固件 v3.10
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: 仓库版本（提交号或分支）
+      description: 运行 `git log --oneline -1` 获取
+    validations:
+      required: true
+  - type: textarea
+    id: host
+    attributes:
+      label: 主机环境
+      description: 操作系统、Python 版本、LLVM 版本、Sony-PMCA-RE 来源、USB 驱动（Windows 可附 `python tools/win_usb_driver.py status`，Linux udev，macOS libusb）
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: "`python tools/a7r3_addon_console.py check` 输出"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: 相关日志（脱敏）
+      description: 例如 `python tools/a7r3_addon_console.py status` 的输出或 `/tmp_bt/addon.log` 片段
+      render: text
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为与实际行为
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认事项
+      options:
+        - label: 我已阅读 DISCLAIMER.md 并理解使用风险由我自担
+          required: true
+        - label: 我没有在本 Issue 中上传 Sony 固件、`.so`、`*.local.h` 或其他专有文件
+          required: true
+        - label: 我已搜索现有 Issue，没有找到重复问题
+          required: true

@@ -22,9 +22,14 @@ SOFTWARE.
 
 ---------------------------------------------------------------------------
 Notice on External Dependencies & Firmware Assets:
-- This repository contains ONLY original C SDK code, Python tooling, and
-  technical documentation. It does NOT distribute any Sony firmware binaries,
-  fonts, proprietary shared libraries, or third-party GPLv3 / PolyForm code.
+- This repository's original C SDK code, Python tooling, and technical
+  documentation are licensed under the MIT License above.
+- As a convenience for Windows users, `tools/win_driver/wdi-simple.exe` is
+  bundled as an independent CLI helper compiled from `pbatard/libwdi` (LGPL-3.0)
+  with embedded `libusb-win32` (GPL-3.0/LGPL-3.0); see `tools/win_driver/README.md`
+  and `tools/win_driver/LICENSE-LGPL-3.0.txt` for license details and source.
+- This repository does NOT distribute any Sony firmware binaries, fonts,
+  proprietary shared libraries, or third-party PolyForm code.
 - Building and deploying onto real hardware requires the user's own legally
   obtained A7R3 v3.10 runtime libraries and external USB transport tools
   (see CREDITS.md and docs/TOOLS_AND_BUILD.md).

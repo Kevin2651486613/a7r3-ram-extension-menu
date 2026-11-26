@@ -4,6 +4,9 @@
 
 ---
 
+> [!NOTE]
+> **维护范围**：当前仅持续维护 Tab7（Route A1 原生第 7 大类）主线。第 3、4 节所述 MD3 自绘菜单与「认证标识」入口劫持属于**已暂停开发的归档路线**（Tag `v1.0-md3`，源码在 `src/legacy/`），仅作实现思路参考。
+
 ## 1. 总体系统架构
 
 ```mermaid
@@ -54,7 +57,7 @@ A7R3 v3.10 显示子系统使用三块 `640×480`、`RGBA4444`（每像素 2 字
 | `0x23A80000` | `flipA` | 线性行优先 (`y * 640 + x`) | 正向自上而下 |
 | `0x23B16000` | `flipB` | 线性行优先 (`y * 640 + x`) | 正向自上而下 |
 
-- 渲染流程先在 `uint16_t g_canvas[640*480]` 上完成全线性绘图，再经 `a7r3_fb_pack_frame()` 一次性同时编码为 `g_pack_linear` 与 `g_pack_morton`（[a7r3_fb.h](../src/a7r3_fb.h) 的 `a7r3_morton_index()`），刷新时通过 `blit32`（每循环 16 字节 + `dsb`）写入三块显存。
+- 渲染流程先在 `uint16_t g_canvas[640*480]` 上完成全线性绘图，再经 `a7r3_fb_pack_frame()` 一次性同时编码为 `g_pack_linear` 与 `g_pack_morton`（[a7r3_fb.h](../src/core/a7r3_fb.h) 的 `a7r3_morton_index()`），刷新时通过 `blit32`（每循环 16 字节 + `dsb`）写入三块显存。
 - 菜单打开瞬间先用 `a7r3_fb_save_native()` 预打包原厂背景，关闭菜单时可在 `< 1 ms` 内无闪烁复原原生界面。
 
 ### 抗原生画面抢占（60 条带互质采样 + `ioctl` 守卫）
