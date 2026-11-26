@@ -43,11 +43,11 @@ git clone https://github.com/ma1co/Sony-PMCA-RE.git ../Sony-PMCA-RE
   sudo apt install clang lld llvm libusb-1.0-0 ffmpeg
   ```
   *(普通用户需配置 Sony `054c` 的 `udev` 规则或用 `sudo` 运行注入。)*
-- **Windows**：安装 LLVM 官方预编译包（含 `clang`、`ld.lld`、`llvm-readelf`）；并使用 **Zadig** 为 Sony 相机接口绑定 **`libusb-win32`**（推荐）或 `libusbK` 驱动（因 `Sony-PMCA-RE` 的 Windows 原生 Service Mode 驱动为占位未实现）。
+- **Windows**：若仅使用 Release 预编译 `.so`，可跳过 LLVM 直接双击 `一键注入拓展菜单.bat`；如需修改 C 代码重新编译，执行 `winget install LLVM.LLVM` 即可（脚本自动探测 `C:\Program Files\LLVM\bin`）。
 
 ### 2.2 一键从相机初始化或手动配置 `.env.local`
 
-如果已连接相机，推荐直接运行（只读拉取至被 `.gitignore` 忽略的 `firmware/lib/` 与 `src/a7r3_dual_hud_payload.local.h`，**自动识别，无需手动填写 `.env.local`**）：
+如果已连接相机，普通测试推荐直接双击 [`一键注入拓展菜单.bat`](../一键注入拓展菜单.bat)；开发阶段也可单独运行（只读拉取至被 `.gitignore` 忽略的 `firmware/lib/` 与 `build/dual_hud_payload.bin`，**自动识别，无需手动填写 `.env.local`**）：
 
 ```powershell
 python tools/a7r3_addon_console.py init-camera
@@ -61,9 +61,9 @@ cp .env.example .env.local
 
 | 环境变量 | 示例值 | 说明 |
 | --- | --- | --- |
-| `A7R3_LLVM_BIN` | `/opt/homebrew/opt/llvm/bin` | 包含 `clang`、`ld.lld`、`llvm-readelf` 的目录（未设置时自动查找 `PATH` 中的 `clang`） |
+| `A7R3_LLVM_BIN` | `/opt/homebrew/opt/llvm/bin` | 包含 `clang`、`ld.lld`、`llvm-readelf` 的目录（Windows 未设置时会自动查找 `PATH` 与 `C:\Program Files\LLVM\bin`） |
 | `A7R3_FW_LIB_DIR` | `/path/to/your/a7r3_v310_extraction/lib` | 用户自行从合法持有的设备/固件中本地提取的 `/lib`（仅编译 `.so` 时需要 `libc-2.11.2.so`、`libdl-2.11.2.so`、`libpthread-2.11.2.so`） |
-| `A7R3_UXC_PATH` | `/path/to/.../usr/share/app/viewStlrec.uxc` | 可选：本地 `viewStlrec.uxc` 路径；未填时会在 `A7R3_FW_LIB_DIR` 相邻目录自动探测生成 `src/a7r3_dual_hud_payload.local.h` |
+| `A7R3_UXC_PATH` | `/path/to/.../usr/share/app/viewStlrec.uxc` | 可选：本地 `viewStlrec.uxc` 路径；未填时会在 `A7R3_FW_LIB_DIR` 相邻目录自动探测生成 `build/dual_hud_payload.bin` |
 | `A7R3_PMCA_DIR` | `/path/to/Sony-PMCA-RE` | 若已克隆至 `./Sony-PMCA-RE` 或 `../Sony-PMCA-RE`，或通过 pip 安装，可留空自动识别 |
 | `A7R3_FONT_BOLD` / `A7R3_FONT_REG` | `/System/Library/Fonts/PingFang.ttc` | 仅重新生成 MD3 中文点阵字模时使用（Route A1 原生第 7 大类不需要此项） |
 

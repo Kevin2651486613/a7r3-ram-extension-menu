@@ -100,8 +100,8 @@ A7R3 v3.10 显示子系统使用三块 `640×480`、`RGBA4444`（每像素 2 字
 
 ## 6. 水平仪与实时直方图同显 (`a7r3_dual_hud.c`)
 
-原生状态下「电子水平仪」与「实时直方图」互斥（由 `viewUnified2.so` 的布局模式门控及外层布局资源决定）。为遵守零固件资源分发的合规原则，本仓库仅保留 C 语言钩子逻辑与可选头文件模板 `src/a7r3_dual_hud_payload.local.h.example`；当不存在本地提供的 `a7r3_dual_hud_payload.local.h` 时，该模块自动以安全透传模式编译并保留 `UserGetLayoutMode` 对相册 DISP 状态的监听。启用完整同显时由 4 个原子钩子协同工作：
-1. **`libObj.so` `getResID` GOT (`0x0121a5c0`) + `RecDtor` GOT (`0x0121a51c`)**：当调用方来自 `ResourceLayoutParser`（`0x0059feca`）且读取水平仪外层布局资源 `RES_ID_LEVEL_OUTER (0x02008029)` 时，保存原对象首字并将之临时指向本地提供的 32 控件内联 `RecordPtr` 载荷 `g_dual_level_rec`（来自 `a7r3_dual_hud_payload.local.h`），使其同时声明水平仪与直方图控件；并在 `RecDtor` 析构前恢复原首字避免释放静态内存。
+原生状态下「电子水平仪」与「实时直方图」互斥（由 `viewUnified2.so` 的布局模式门控及外层布局资源决定）。为遵守零固件资源分发的合规原则，`.so` 产物本身**不内嵌任何 Sony 布局字节**；注入工具在部署时会从本机已合法提取的 `viewStlrec.uxc` 或已连接相机只读提取并校验 SHA-256 指纹后，生成带魔数（`DHUD`）与 FNV-1a-32 校验和的运行时二进制缓存 `build/dual_hud_payload.bin` 并上传至相机纯内存 `/tmp_bt/dual_hud_payload.bin`。`a7r3_dual_hud_install()` 在安装钩子前一次性将其读入静态缓冲区 `g_dual_level_rec`（安装后零文件 I/O）；若 `/tmp_bt/dual_hud_payload.bin` 缺失或校验失败，模块自动回退至安全透传模式（并在菜单中置灰）且保留 `UserGetLayoutMode` 对相册 DISP 状态的监听。启用完整同显时由 4 个原子钩子协同工作：
+1. **`libObj.so` `getResID` GOT (`0x0121a5c0`) + `RecDtor` GOT (`0x0121a51c`)**：当调用方来自 `ResourceLayoutParser`（`0x0059feca`）且读取水平仪外层布局资源 `RES_ID_LEVEL_OUTER (0x02008029)` 时，保存原对象首字并将之临时指向静态缓冲区中的 32 控件内联 `RecordPtr` 载荷 `g_dual_level_rec`，使其同时声明水平仪与直方图控件；并在 `RecDtor` 析构前恢复原首字避免释放静态内存。
 2. **`viewUnified2.so` `UserGetLayoutMode` GOT (`0x008cd0fc`) & 路由虚表槽 (`0x008602d4`)**：在 Gate 1 调用点（`0x001ae78c`）以及路由判定函数放行直方图控件 ID（`0xc96d8ddc`）映射至新主控容器（`0xd1153927`），实现同屏叠加且保留正常切换其他 DISP 模式的能力。
 
 ---
