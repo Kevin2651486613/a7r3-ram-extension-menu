@@ -23,13 +23,16 @@ HUD_DIR_ENV = os.environ.get("A7R3_HUD_DIR", "").strip()
 PMCA_DIR_ENV = os.environ.get("A7R3_PMCA_DIR", "").strip()
 HUD_DIR = Path(HUD_DIR_ENV) if HUD_DIR_ENV else None
 
-for _extra in (
-    TOOLS_DIR,
-    Path(PMCA_DIR_ENV) if PMCA_DIR_ENV else None,
-    SDK_DIR / "vendor" / "Sony-PMCA-RE",
-    SDK_DIR / "Sony-PMCA-RE",
-    SDK_DIR.parent / "Sony-PMCA-RE",
-    (HUD_DIR / "vendor").resolve() if HUD_DIR else None,
+for _extra in reversed(
+    (
+        TOOLS_DIR,
+        Path(PMCA_DIR_ENV) if PMCA_DIR_ENV else None,
+        TOOLS_DIR / "vendor",
+        SDK_DIR / "vendor" / "Sony-PMCA-RE",
+        SDK_DIR / "Sony-PMCA-RE",
+        SDK_DIR.parent / "Sony-PMCA-RE",
+        (HUD_DIR / "vendor").resolve() if HUD_DIR else None,
+    )
 ):
     if _extra is not None and _extra.exists() and str(_extra) not in sys.path:
         sys.path.insert(0, str(_extra))
@@ -104,8 +107,8 @@ def require_usb_runtime() -> None:
         )
     if _USB_IMPORT_ERR is not None:
         raise RuntimeError(
-            f"缺少外部 Sony-PMCA-RE (`pmca`) 或 libusb/pyusb 依赖 ({_USB_IMPORT_ERR})。"
-            "请先安装 `pip install -r requirements.txt`，并克隆 https://github.com/ma1co/Sony-PMCA-RE 后在 .env.local 配置 A7R3_PMCA_DIR。"
+            f"USB 运行时依赖加载失败 ({_USB_IMPORT_ERR})。"
+            "请先安装 `pip install -r requirements.txt`（已内置精简版 tools/vendor/pmca，无需单独克隆 Sony-PMCA-RE）。"
         )
 
 

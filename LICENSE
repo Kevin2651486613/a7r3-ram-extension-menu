@@ -24,6 +24,9 @@ SOFTWARE.
 Notice on External Dependencies & Firmware Assets:
 - This repository's original C SDK code, Python tooling, and technical
   documentation are licensed under the MIT License above.
+- `tools/vendor/pmca/` bundles a minimal MIT-licensed USB/Senser subset
+  extracted from `ma1co/Sony-PMCA-RE` (Copyright (c) 2015 ma1co); see
+  `tools/vendor/pmca/LICENSE-MIT.txt` and `tools/vendor/pmca/README.md`.
 - As a convenience for Windows users, `tools/win_driver/wdi-simple.exe` is
   bundled as an independent CLI helper compiled from `pbatard/libwdi` (LGPL-3.0)
   with embedded `libusb-win32` (GPL-3.0/LGPL-3.0); see `tools/win_driver/README.md`

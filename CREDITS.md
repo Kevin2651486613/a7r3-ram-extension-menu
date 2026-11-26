@@ -6,26 +6,27 @@
 
 ---
 
-## 1. 随仓库附带的独立第三方工具
+## 1. 随仓库附带的第三方组件
 
 | 组件 | 上游项目 / 作者 | 协议 | 说明 |
 | --- | --- | --- | --- |
+| `tools/vendor/pmca/` | [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) (`ma1co`) | **MIT** | 按最小闭包精简内置的 USB Service Mode 握手、Senser 终端与 `/tmp_bt` 文件读写子集（去除 APK/商店/固件/TLS 等无关模块）；详见 [tools/vendor/pmca/README.md](tools/vendor/pmca/README.md) 与 [LICENSE-MIT.txt](tools/vendor/pmca/LICENSE-MIT.txt) |
 | `tools/win_driver/wdi-simple.exe` | [pbatard/libwdi](https://github.com/pbatard/libwdi) (`v1.5.1`) & [mcuee/libusb-win32](https://github.com/mcuee/libusb-win32) (`v1.4.0.0`) | **LGPL-3.0** / **GPL-3.0** | Windows 端独立子进程命令行工具，用于为相连 Sony 相机临时安装 `libusb0` 并在注入完成后通过 `pnputil` 卸载还原；详见 [tools/win_driver/README.md](tools/win_driver/README.md) 与 [LICENSE-LGPL-3.0.txt](tools/win_driver/LICENSE-LGPL-3.0.txt) |
 
 ---
 
-## 2. 构建与运行时外部依赖（需用户自行获取，未随仓库分发）
+## 2. 构建与运行时外部依赖（`pip` / 系统工具）
 
 | 组件 | 上游项目 / 组织 | 协议 | 用途 |
 | --- | --- | --- | --- |
-| `pmca` (`Sony-PMCA-RE`) | [ma1co/Sony-PMCA-RE](https://github.com/ma1co/Sony-PMCA-RE) | MIT | USB Service Mode 握手、终端认证与 `/tmp_bt` 文件传输通道 |
-| **LLVM / Clang + LLD** | [llvm/llvm-project](https://github.com/llvm/llvm-project) | Apache-2.0 with LLVM-exception | 交叉编译 ARMv7-A freestanding `.so` 与 ELF 校验（`clang` / `ld.lld` / `llvm-readelf`） |
+| **LLVM / Clang + LLD** | [llvm/llvm-project](https://github.com/llvm/llvm-project) | Apache-2.0 with LLVM-exception | 交叉编译 ARMv7-A freestanding `.so` 与 ELF 校验（`clang` / `ld.lld` / `llvm-readelf`；使用预编译 Release `.so` 时不需要） |
 | **Keystone Engine** | [keystone-engine/keystone](https://github.com/keystone-engine/keystone) | GPLv2 | 宿主机端汇编远程 ARM ELF 工具（`tools/ram_loader/` 自身为 MIT 清洁室实现） |
 | **PyUSB / libusb** | [pyusb/pyusb](https://github.com/pyusb/pyusb) & [libusb/libusb](https://github.com/libusb/libusb) | BSD-3-Clause / LGPL-2.1 | 跨平台 USB 底层读写接口 |
+| **PyCryptodomex** | [Legrandin/pycryptodome](https://github.com/Legrandin/pycryptodome) | BSD-2-Clause / Public Domain | Senser 认证握手所需的 SHA-256 哈希计算 |
 | **FFmpeg**（可选） | [FFmpeg](https://ffmpeg.org/) | LGPL / GPL | 将外部音频转换为机内兼容的 24 kHz 单声道 16-bit PCM `.wav` |
 | **Pillow**（可选/归档） | [python-pillow/Pillow](https://github.com/python-pillow/Pillow) | HPND | 仅用于手动编译已暂停的 `src/legacy/` MD3 归档路线生成点阵字模（Tab7 主线不需要） |
 
-> 注：纯 RAM 注入所需的 [terminal_shell.py](tools/ram_loader/terminal_shell.py)、[build_mem_writer.py](tools/ram_loader/build_mem_writer.py)、[build_show_hex.py](tools/ram_loader/build_show_hex.py) 与 [build_ram_tools.py](tools/ram_loader/build_ram_tools.py) 均采用清洁室方式基于 MIT 协议从零实现，仅调用 `Sony-PMCA-RE` 的终端收发接口与 Linux 标准系统调用。
+> 注：纯 RAM 注入所需的 [terminal_shell.py](tools/ram_loader/terminal_shell.py)、[build_mem_writer.py](tools/ram_loader/build_mem_writer.py)、[build_show_hex.py](tools/ram_loader/build_show_hex.py) 与 [build_ram_tools.py](tools/ram_loader/build_ram_tools.py) 均采用清洁室方式基于 MIT 协议从零实现，仅调用内置精简版 `tools/vendor/pmca/` 的终端收发接口与 Linux 标准系统调用。
 
 ---
 
