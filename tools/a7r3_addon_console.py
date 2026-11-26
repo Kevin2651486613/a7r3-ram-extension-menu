@@ -32,9 +32,17 @@ from deploy_ram import (  # noqa: E402
     validate_arm32_shared_elf,
 )
 from build_addon import resolve_fw_lib_dir, resolve_llvm_bin, tool_exe  # noqa: E402
+from win_usb_driver import (  # noqa: E402
+    SonyDriverGuard,
+    WDI_SIMPLE_EXE,
+    ensure_service_mode_driver_ready,
+    format_status_lines as format_win_driver_status,
+    is_windows as is_windows_host,
+    restore_all_sony_drivers,
+)
 
 DEFAULT_SO = SDK_DIR / "build" / "demo_native_tab7_ram.so"
-DEFAULT_SRC = SDK_DIR / "src" / "demo_native_tab7.c"
+DEFAULT_SRC = SDK_DIR / "src" / "entries" / "demo_native_tab7.c"
 GEN_ASSETS = TOOLS_DIR / "gen_md3_assets.py"
 BUILD_SCRIPT = TOOLS_DIR / "build_addon.py"
 
@@ -76,7 +84,7 @@ def configure_utf8_stdio() -> None:
 def validate_runtime_env() -> None:
     if sys.version_info < (3, 10):
         raise RuntimeError(f"需要 Python 3.10+，当前版本为 {sys.version.split()[0]}")
-    for p in (GEN_ASSETS, BUILD_SCRIPT, DEFAULT_SRC):
+    for p in (BUILD_SCRIPT, DEFAULT_SRC):
         if not p.is_file():
             raise FileNotFoundError(f"缺少必要工程文件: {p}")
 
@@ -85,12 +93,12 @@ def validate_so_path(so_path: Path) -> None:
     validate_arm32_shared_elf(so_path)
 
 
-def open_service_session(force: bool = False):
+def open_service_session(force: bool = False, on_wait_senser=None):
     require_usb_runtime()
     driver_ctx = open_usb_drivers()
     driver = driver_ctx.__enter__()
     try:
-        dev = ensure_service_terminal(driver, force=force)
+        dev = ensure_service_terminal(driver, force=force, on_wait_senser=on_wait_senser)
         backend = SenserPlatformBackend(SonySenserCamera(dev))
         sh = lambda cmd, timeout=15: shell_command(dev, cmd, timeout=timeout)
         return driver_ctx, backend, sh
@@ -232,7 +240,6 @@ def action_check(so_path: Path) -> int:
     )
 
     for pkg, desc in (
-        ("PIL", "Pillow 字模生成"),
         ("keystone", "Keystone ARM 汇编"),
         ("usb", "PyUSB / libusb 驱动"),
         ("pmca", "Sony-PMCA-RE (A7R3_PMCA_DIR)"),
@@ -271,6 +278,18 @@ def action_check(so_path: Path) -> int:
         helpers_msg = f"加载失败 ({exc})"
     print(f"  [{'OK' if helpers_ok else 'WARN'}] 内置注入助手 (terminal_shell / mem_writer / show_hex): {helpers_msg}")
 
+    if is_windows_host():
+        wdi_ok = WDI_SIMPLE_EXE.is_file()
+        print(
+            f"  [{'OK' if wdi_ok else 'WARN'}] Windows 一键驱动助手 (win_driver/wdi-simple.exe): "
+            f"{WDI_SIMPLE_EXE if wdi_ok else '未找到'}"
+        )
+        try:
+            for dline in format_win_driver_status():
+                print(f"      - {dline}")
+        except Exception:
+            pass
+
     local_payload = SDK_DIR / "src" / "a7r3_dual_hud_payload.local.h"
     if local_payload.is_file():
         payload_msg = "已配置 (.local.h)"
@@ -307,7 +326,7 @@ def action_deploy(so_path: Path, force: bool = False) -> int:
     print(f"[*] 准备纯内存部署: {so_path.name} ({so_path.stat().st_size} bytes)")
     print("[*] 安全模式: 仅写入 /tmp_bt (tmpfs) 与 im.elf 内存，零 NAND Flash 写入。")
     driver_ctx, backend, sh = open_service_session(force=force)
-    with driver_ctx:
+    try:
         pid = get_im_pid(sh, force=force)
         print(f"[+] 相机主机进程 im.elf PID={pid}")
         if is_addon_running(read_log(sh)):
@@ -321,11 +340,13 @@ def action_deploy(so_path: Path, force: bool = False) -> int:
         print_hook_summary(log_text)
         print("\n[+] 部署完成! 使用方式: 相机按 MENU -> 顶栏第 7 个大类 (拓展菜单)")
         return rc
+    finally:
+        driver_ctx.__exit__(None, None, None)
 
 
 def action_status(force: bool = False) -> int:
     driver_ctx, _, sh = open_service_session(force=force)
-    with driver_ctx:
+    try:
         pid = get_im_pid(sh, force=force)
         print(f"[+] 相机已连接，主进程 im.elf PID={pid}")
         full_log = read_log(sh)
@@ -337,11 +358,13 @@ def action_status(force: bool = False) -> int:
         print("\n--- 最近日志 (tail 20) ---")
         print(tail)
         return 0
+    finally:
+        driver_ctx.__exit__(None, None, None)
 
 
 def action_open(force: bool = False) -> int:
     driver_ctx, _, sh = open_service_session(force=force)
-    with driver_ctx:
+    try:
         pid = get_im_pid(sh, force=force)
         log_text = read_log(sh)
         if not is_addon_running(log_text):
@@ -351,15 +374,19 @@ def action_open(force: bool = False) -> int:
         time.sleep(0.3)
         print("[+] 已触发打开相机屏幕上的 MD3 拓展菜单。")
         return 0
+    finally:
+        driver_ctx.__exit__(None, None, None)
 
 
 def action_quit(force: bool = False) -> int:
     driver_ctx, _, sh = open_service_session(force=force)
-    with driver_ctx:
+    try:
         pid = get_im_pid(sh, force=force)
         print(f"[+] 相机已连接，主进程 im.elf PID={pid}")
         safe_quit(sh)
         return 0
+    finally:
+        driver_ctx.__exit__(None, None, None)
 
 
 def action_build(so_path: Path) -> int:
@@ -426,8 +453,9 @@ def action_init_camera(force: bool = False) -> int:
     )
 
     print("[*] 正在连接相机只读初始化本地开发环境（零闪存写入，产出均位于 .gitignore 目录）...")
+    # open_service_session() already entered the USB driver context; exit it exactly once here.
     driver_ctx, backend, sh = open_service_session(force=force)
-    with driver_ctx:
+    try:
         for remote_p in lib_files:
             data = read_camera_file_verified(backend, sh, remote_p)
             dst = out_lib_dir / Path(remote_p).name
@@ -437,6 +465,8 @@ def action_init_camera(force: bool = False) -> int:
         uxc_bytes = read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
         out_h = generate_local_header(uxc_bytes, out_path=DEFAULT_OUT)
         print(f"[+] 已生成本地双显载荷: {out_h}")
+    finally:
+        driver_ctx.__exit__(None, None, None)
 
     print("[+] 本地开发环境初始化完成！现在可以直接运行 `check` / `build` / `update`。")
     return 0
@@ -450,31 +480,128 @@ def action_update(so_path: Path, force: bool = False) -> int:
     return action_deploy(so_path, force=force)
 
 
+def action_restore_driver() -> int:
+    if not is_windows_host():
+        print("[*] 当前为非 Windows 系统，无需还原 Windows USB 驱动。")
+        return 0
+    res = restore_all_sony_drivers(verbose=True)
+    if res["errors"] or res["remaining"]:
+        print("[!] 仍有临时 Sony libusb-win32 驱动残留，请确认未有程序占用设备并以管理员重试。")
+        return 1
+    return 0
+
+
+def _sources_newer_than(so_path: Path) -> bool:
+    if not so_path.is_file():
+        return True
+    so_mtime = so_path.stat().st_mtime
+    watch_files: list[Path] = [BUILD_SCRIPT]
+    for sub in ("core", "modules", "entries"):
+        sub_dir = SDK_DIR / "src" / sub
+        if sub_dir.is_dir():
+            watch_files.extend(sub_dir.glob("*.c"))
+            watch_files.extend(sub_dir.glob("*.h"))
+    local_payload = SDK_DIR / "src" / "a7r3_dual_hud_payload.local.h"
+    if local_payload.is_file():
+        watch_files.append(local_payload)
+    return any(p.is_file() and p.stat().st_mtime > so_mtime for p in watch_files)
+
+
+def action_one_click(
+    so_path: Path,
+    force: bool = False,
+    rebuild: bool = False,
+    keep_driver: bool = False,
+) -> int:
+    """Full end-to-end flow: auto driver swap -> init if needed -> build if needed -> RAM deploy -> restore drivers."""
+    from gen_dual_hud_payload import CAMERA_UXC_PATH, DEFAULT_OUT, find_local_uxc, generate_local_header
+
+    validate_runtime_env()
+    print("=== Sony A7R3 一键纯 RAM 注入全流程 ===")
+    if is_windows_host():
+        print("[*] 模式: 自动切换临时 libusb-win32 驱动 -> 注入部署 -> 完成后自动全部还原。")
+
+    with SonyDriverGuard(auto_restore=not keep_driver):
+        seen_senser: set[int] = set()
+        wait_cb = (lambda: ensure_service_mode_driver_ready(seen_senser)) if is_windows_host() else None
+        driver_ctx, backend, sh = open_service_session(force=force, on_wait_senser=wait_cb)
+        try:
+            fw_dir = resolve_fw_lib_dir(None)
+            fw_ok = bool(
+                fw_dir
+                and (fw_dir / "libc-2.11.2.so").is_file()
+                and (fw_dir / "libdl-2.11.2.so").is_file()
+                and (fw_dir / "libpthread-2.11.2.so").is_file()
+            )
+            if not fw_ok:
+                print("[*] 未检测到本地 A7R3 v3.10 编译依赖库，正在从相机只读初始化...")
+                out_lib_dir = SDK_DIR / "firmware" / "lib"
+                out_lib_dir.mkdir(parents=True, exist_ok=True)
+                for remote_p in ("/lib/libc-2.11.2.so", "/lib/libdl-2.11.2.so", "/lib/libpthread-2.11.2.so"):
+                    data = read_camera_file_verified(backend, sh, remote_p)
+                    dst = out_lib_dir / Path(remote_p).name
+                    dst.write_bytes(data)
+                    print(f"[+] 已保存 {dst} ({len(data)} bytes)")
+                fw_dir = out_lib_dir
+
+            if not DEFAULT_OUT.is_file() and find_local_uxc(fw_dir) is None:
+                print(f"[*] 正在从相机只读读取 {CAMERA_UXC_PATH} 以生成双显载荷...")
+                uxc_bytes = read_camera_file_verified(backend, sh, CAMERA_UXC_PATH)
+                out_h = generate_local_header(uxc_bytes, out_path=DEFAULT_OUT)
+                print(f"[+] 已生成本地双显载荷: {out_h}")
+
+            if rebuild or _sources_newer_than(so_path):
+                rc_build = action_build(so_path)
+                if rc_build != 0:
+                    return rc_build
+
+            validate_so_path(so_path)
+            pid = get_im_pid(sh, force=force)
+            print(f"[+] 相机主机进程 im.elf PID={pid}")
+            if is_addon_running(read_log(sh)):
+                print("[*] 检测到旧版实例正在运行，先执行安全无损卸载...")
+                safe_quit(sh)
+                time.sleep(0.3)
+
+            rc = cmd_deploy(backend, sh, so_path, open_now=False, force=force)
+            if rc != 0:
+                return rc
+            time.sleep(0.3)
+            print_hook_summary(read_log(sh))
+        finally:
+            driver_ctx.__exit__(None, None, None)
+
+    print("\n[+] 一键纯 RAM 注入完成! 请在相机上按 MENU -> 顶栏第 7 个大类 (拓展菜单)。")
+    if is_windows_host() and not keep_driver:
+        print("[+] 临时 libusb-win32 驱动已全部卸载还原，现在可直接安全拔下 USB 数据线使用相机。")
+    return 0
+
+
 def print_banner(so_path: Path) -> None:
     if so_path.exists():
         st = so_path.stat()
         mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
         so_info = f"就绪 ({st.st_size} bytes, 更新于 {mtime})"
     else:
-        so_info = "未编译 (需先选 5 或 6)"
+        so_info = "未编译 (一键注入会自动编译)"
 
-    print("=" * 64)
+    print("=" * 68)
     print("  Sony ILCE-7RM3 (A7R3 v3.10) 原生第 7 大类拓展菜单控制台 (Route A1)")
     print("  [测试开发版] 存在潜在不稳定风险 · 仅写入 /tmp_bt 与 RAM")
-    print("=" * 64)
+    print("=" * 68)
     print(f"  目标插件: {so_path.name} -> {so_info}")
-    print("-" * 64)
-    print("  [1] 一键部署到相机内存 (如已运行则先自动卸载旧版)")
-    print("  [2] 查看相机连接与运行状态 / 日志")
-    print("  [3] 立即弹出叠加菜单 (仅 MD3 模式有效)")
+    print("-" * 68)
+    print("  [1] 全自动一键注入 (自动换驱动 + 自动初始化/编译 + 纯 RAM 部署 + 还原驱动)")
+    print("  [2] 仅部署当前已编译插件 (不自动切换驱动)")
+    print("  [3] 查看相机连接与运行状态 / 日志")
     print("  [4] 安全卸载插件并恢复原生钩子 (不重启相机)")
     print("  [5] 重新编译插件 (.so)")
-    print("  [6] 一键编译并热更新部署到相机")
+    print("  [6] 编译并部署 (不自动切换驱动)")
     print("  [7] 环境与边界安全自检 (离线检查，无需连接相机)")
-    print("  [8] 生成本地双显载荷 (a7r3_dual_hud_payload.local.h)")
+    print("  [8] 手动恢复相机原生 USB 驱动 (卸载临时 libusb-win32，恢复 USBSTOR)")
     print("  [9] 从相机只读初始化编译依赖 (/lib 三件套 + 双显载荷)")
     print("  [0] 退出控制台")
-    print("-" * 64)
+    print("-" * 68)
 
 
 def interactive_loop(so_path: Path, force: bool = False) -> int:
@@ -495,11 +622,11 @@ def interactive_loop(so_path: Path, force: bool = False) -> int:
         print("")
         try:
             if choice == "1":
-                action_deploy(so_path, force=force)
+                action_one_click(so_path, force=force)
             elif choice == "2":
-                action_status(force=force)
+                action_deploy(so_path, force=force)
             elif choice == "3":
-                action_open(force=force)
+                action_status(force=force)
             elif choice == "4":
                 action_quit(force=force)
             elif choice == "5":
@@ -509,7 +636,7 @@ def interactive_loop(so_path: Path, force: bool = False) -> int:
             elif choice == "7":
                 action_check(so_path)
             elif choice == "8":
-                action_gen_payload(force=force)
+                action_restore_driver()
             elif choice == "9":
                 action_init_camera(force=force)
             else:
@@ -535,13 +662,35 @@ def main() -> int:
     ap.add_argument(
         "action",
         nargs="?",
-        choices=("deploy", "status", "open", "quit", "build", "update", "check", "gen-payload", "init-camera"),
+        choices=(
+            "one-click",
+            "restore-driver",
+            "deploy",
+            "status",
+            "open",
+            "quit",
+            "build",
+            "update",
+            "check",
+            "gen-payload",
+            "init-camera",
+        ),
         help="可选直接执行的子命令；不填则进入交互式菜单",
     )
     ap.add_argument(
         "--from-camera",
         action="store_true",
         help="配合 gen-payload 使用：直接从已连接相机只读读取 viewStlrec.uxc",
+    )
+    ap.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="配合 one-click 使用：即使 .so 已存在也强制重新编译",
+    )
+    ap.add_argument(
+        "--keep-driver",
+        action="store_true",
+        help="配合 one-click 使用：注入完成后暂时保留 libusb-win32 驱动以便后续快速调试 status/quit",
     )
     ap.add_argument(
         "--so",
@@ -568,6 +717,10 @@ def main() -> int:
     try:
         if args.action == "check":
             return action_check(args.so)
+        if args.action == "one-click":
+            return action_one_click(args.so, force=args.force, rebuild=args.rebuild, keep_driver=args.keep_driver)
+        if args.action == "restore-driver":
+            return action_restore_driver()
         if args.action == "deploy":
             return action_deploy(args.so, force=args.force)
         if args.action == "status":

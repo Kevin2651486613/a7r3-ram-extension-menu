@@ -10,6 +10,7 @@ as `0xd1153927` into level layout `0x02008029`, and writes gitignored
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import struct
 import sys
@@ -33,6 +34,14 @@ WID_HIST_SRC_MASTER = 0xD1073927
 WID_NEW_MASTER = 0xD1153927
 EXPECTED_PATCHED_LEN = 2380
 CAMERA_UXC_PATH = "/usr/share/app/viewStlrec.uxc"
+
+# SHA-256 fingerprints of the two UXC records this patch actually reads from,
+# taken from a known-good, unpatched Sony ILCE-7RM3 v3.10 viewStlrec.uxc.
+# A length match alone does not prove the input is genuine v3.10 firmware data;
+# these pin the exact bytes the patch depends on. No bypass is provided:
+# a mismatch must fail closed.
+EXPECTED_REC_LVL_SHA256 = "62e66099a0ccc88a98837248678735aa7e8eac0133cf8967f25e7a910a39d1d7"
+EXPECTED_REC_HIST_SHA256 = "6dce97a52802f5680f1a3f00e649a5b27ce70805938296f6aa80d41835c0ef5b"
 
 
 def find_local_uxc(
@@ -121,6 +130,17 @@ def patch_viewstlrec(uxc_bytes: bytes) -> bytes:
     rec_lvl = _extract_uxc_record(uxc_bytes, SLOT_LEVEL_OUTER)
     rec_hist = _extract_uxc_record(uxc_bytes, SLOT_HIST_OUTER)
 
+    lvl_digest = hashlib.sha256(rec_lvl).hexdigest()
+    hist_digest = hashlib.sha256(rec_hist).hexdigest()
+    if lvl_digest != EXPECTED_REC_LVL_SHA256 or hist_digest != EXPECTED_REC_HIST_SHA256:
+        raise ValueError(
+            "viewStlrec.uxc fingerprint mismatch: slot "
+            f"{SLOT_LEVEL_OUTER:#x} sha256={lvl_digest} (expected {EXPECTED_REC_LVL_SHA256}), "
+            f"slot {SLOT_HIST_OUTER:#x} sha256={hist_digest} (expected {EXPECTED_REC_HIST_SHA256}). "
+            "This does not match the known-good Sony ILCE-7RM3 v3.10 viewStlrec.uxc; "
+            "refusing to patch an unverified or already-modified file."
+        )
+
     _, _, hist_widgets, _ = _parse_record_ptr(rec_hist)
     src_master = [
         w
@@ -172,7 +192,7 @@ def patch_viewstlrec(uxc_bytes: bytes) -> bytes:
 
 
 def format_local_header(payload: bytes) -> str:
-    """Format the gitignored C header consumed by `src/a7r3_dual_hud.c`."""
+    """Format the gitignored C header consumed by `src/modules/a7r3_dual_hud.c`."""
     lines = [
         "#ifndef A7R3_DUAL_HUD_PAYLOAD_H",
         "#define A7R3_DUAL_HUD_PAYLOAD_H",

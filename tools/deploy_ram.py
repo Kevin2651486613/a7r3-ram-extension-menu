@@ -164,13 +164,26 @@ def check_camera_model(dev, force: bool = False) -> None:
     get_model = getattr(cam, "getModel", None)
     if not callable(get_model):
         return
+    # Fail closed: if the model cannot be read, refuse to continue unless --force is given.
     try:
         model_info = get_model()
-    except Exception:
-        return
+    except Exception as exc:
+        if force:
+            print(f"[!] 无法读取机身型号 ({exc})，已按 --force 跳过校验")
+            return
+        raise RuntimeError(
+            f"无法读取机身型号，无法确认机型 ({exc})。"
+            "当前逆向偏移仅针对 ILCE-7RM3 v3.10；如确需强制实验，请传 --force。"
+        ) from exc
     model_str = str(model_info or "").strip()
     if not model_str:
-        return
+        if force:
+            print("[!] 机身型号为空，已按 --force 跳过校验")
+            return
+        raise RuntimeError(
+            "机身型号为空，无法确认机型。"
+            "当前逆向偏移仅针对 ILCE-7RM3 v3.10；如确需强制实验，请传 --force。"
+        )
     print(f"[*] 检测到机身型号信息: {model_str}")
     if "ILCE-7RM3" not in model_str.upper() and not force:
         raise RuntimeError(
@@ -283,7 +296,7 @@ def diagnose_sony_usb_state() -> str:
     return f"USB 总线检测到: {', '.join(lines)}。" + (" ".join(hints) if hints else "")
 
 
-def ensure_service_terminal(driver, force: bool = False):
+def ensure_service_terminal(driver, force: bool = False, on_wait_senser=None):
     require_usb_runtime()
     try:
         dev = getDevice(driver)
@@ -299,15 +312,20 @@ def ensure_service_terminal(driver, force: bool = False):
         )
 
     if isinstance(dev, SonySenserDevice):
+        # Only the terminal liveness probe is allowed to trigger re-authentication.
+        # The model check runs afterwards so a wrong-model error is not swallowed.
         try:
             for _ in range(5):
                 dev.readTerminal()
                 time.sleep(0.05)
             shell_command(dev, "echo PING", timeout=2)
-            print("[+] Service terminal already active.")
-            check_camera_model(dev, force=force)
-            return dev
+            terminal_ready = True
         except Exception:
+            terminal_ready = False
+
+        if terminal_ready:
+            print("[+] Service terminal already active.")
+        else:
             auth = SonySenserAuthDevice(dev.driver)
             auth.start()
             auth.authenticate()
@@ -316,10 +334,15 @@ def ensure_service_terminal(driver, force: bool = False):
             for _ in range(5):
                 dev.readTerminal()
                 time.sleep(0.05)
-            check_camera_model(dev, force=force)
-            return dev
+        check_camera_model(dev, force=force)
+        return dev
 
     if isinstance(dev, SonyMscExtCmdDevice):
+        if not hasattr(dev.driver, "vendorRequestOut"):
+            raise RuntimeError(
+                "当前相机 Mass Storage 接口仍使用 Windows 原生存储驱动，无法直接发送 Service Mode 控制指令。\n"
+                "请改用根目录的 `一键注入拓展菜单.bat`（或执行 `python tools/a7r3_addon_console.py one-click`）自动完成临时驱动切换与还原。"
+            )
         try:
             auth = SonySenserAuthDevice(dev.driver)
             auth.start()
@@ -330,8 +353,17 @@ def ensure_service_terminal(driver, force: bool = False):
             ) from exc
 
         senser_dev = None
-        for _ in range(50):
+        deadline = time.monotonic() + 25.0
+        attempt = 0
+        while time.monotonic() < deadline:
             time.sleep(0.5)
+            attempt += 1
+            if callable(on_wait_senser) and attempt >= 3:
+                try:
+                    if on_wait_senser():
+                        deadline = max(deadline, time.monotonic() + 10.0)
+                except Exception as cb_exc:
+                    raise RuntimeError(f"自动切换 Service Mode 驱动失败: {cb_exc}") from cb_exc
             try:
                 devices = [d for d in listDevices(driver, True) if isinstance(d, SonySenserDevice)]
                 if len(devices) == 1:
