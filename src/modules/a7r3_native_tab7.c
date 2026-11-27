@@ -25,6 +25,7 @@
 #define PROC_MGR_VT_COPY_WORDS    28u          /* -2 RTTI/offset words + 26 slots */
 #define VU2_POPUP_OPEN_GOT        0x008cc46cUL
 #define VU2_POPUP_OPEN_REAL       0x0053c8c5UL /* Thumb */
+#define VU2_POPUP_OPEN_PLT0       0x00152c38UL /* viewUnified2.so .plt[0] lazy stub */
 #define VU2_POPUP_OPEN_FLAG_OFF   0x15ad6u
 
 #define LIBOBJ_TEXT_SETSTR_ID_GOT    0x0121aa9cUL
@@ -897,14 +898,21 @@ int a7r3_native_tab7_install(void)
     {
         volatile unsigned long *pop_slot =
             (volatile unsigned long *)(vu2_base + VU2_POPUP_OPEN_GOT);
-        if (!a7r3_pm_writable((const void *)pop_slot, 4u) ||
-            *pop_slot != (vu2_base + VU2_POPUP_OPEN_REAL)) {
-            a7r3_log_hex("SDK_TAB7_POPUP_MISMATCH=",
-                         a7r3_pm_readable((const void *)pop_slot, 4u) ? *pop_slot : 0UL);
+        unsigned long cur_pop = 0UL;
+        if (!a7r3_pm_writable((const void *)pop_slot, 4u)) {
+            a7r3_log_hex("SDK_TAB7_POPUP_MISMATCH=", 0UL);
             a7r3_native_tab7_remove();
             return -6;
         }
-        g_orig_popup_open_got = *pop_slot;
+        cur_pop = *pop_slot;
+        /* R_ARM_JUMP_SLOT may still point to .plt[0] before first popup open on cold boot. */
+        if (cur_pop != (vu2_base + VU2_POPUP_OPEN_REAL) &&
+            cur_pop != (vu2_base + VU2_POPUP_OPEN_PLT0)) {
+            a7r3_log_hex("SDK_TAB7_POPUP_MISMATCH=", cur_pop);
+            a7r3_native_tab7_remove();
+            return -6;
+        }
+        g_orig_popup_open_got = cur_pop;
         g_real_popup_open = (popup_open_fn)(uintptr_t)(vu2_base + VU2_POPUP_OPEN_REAL);
         a7r3_dsb();
         *pop_slot = (unsigned long)(uintptr_t)&tab7_popup_open_hook;

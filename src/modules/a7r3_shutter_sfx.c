@@ -49,6 +49,15 @@
 #define FSYS_TNTFS_OPENDIR_GOT   0x0006bf0cUL
 #define FSYS_TNTFS_READDIR_GOT   0x0006b914UL
 #define FSYS_TNTFS_CLOSEDIR_GOT  0x0006b9a0UL
+#define FSYS_PLT0_OFF            0x0000f920UL
+
+/* libInfraMediaCommon.so direct Thumb offsets (immune to lazy PLT0 in libInfraFsys.so) */
+#define MC_TNTFS_OPENDIR         0x0001a2b1UL
+#define MC_TNTFS_CLOSEDIR        0x0001a3b5UL
+#define MC_TNTFS_READDIR         0x0001a471UL
+#define MC_TNTFS_FOPEN           0x0001aa89UL
+#define MC_TNTFS_FCLOSE          0x0001abb1UL
+#define MC_TNTFS_FREAD           0x0001ac6dUL
 
 #define ADF_UNIT_ID              0x2bu
 #define APP_UNIT_TYPE            0x00070817u
@@ -931,6 +940,9 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
         pat[p++] = '*';
         pat[p] = '\0';
 
+        /* Invalidate PrFILE_fsfirst 1-entry cache (drv+0x254) so USB remount / card swap / rescan never replays stale state */
+        if (a7r3_pm_writable((uint8_t *)drv + 0x254, 1u))
+            ((uint8_t *)drv)[0x254] = 0u;
         mem_zero(g_find_info, sizeof(g_find_info));
         rc = g_prfile_fsfirst(drv, pat, 0x80u, g_find_info);
         if (subdir[0] == 'S' && subdir[1] == 'H') {
@@ -1211,12 +1223,32 @@ int a7r3_shutter_sfx_install(void)
     g_pf2_fopen = (pf2_fopen_fn)(uintptr_t)(g_fsys_base + FSYS_PF2_FOPEN);
     g_pf2_fread = (pf2_fread_fn)(uintptr_t)(g_fsys_base + FSYS_PF2_FREAD);
     g_pf2_fclose = (pf2_fclose_fn)(uintptr_t)(g_fsys_base + FSYS_PF2_FCLOSE);
-    g_tntfs_fopen = (tntfs_fopen_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_FOPEN_GOT);
-    g_tntfs_fread = (tntfs_fread_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_FREAD_GOT);
-    g_tntfs_fclose = (tntfs_fclose_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_FCLOSE_GOT);
-    g_tntfs_opendir = (tntfs_opendir_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_OPENDIR_GOT);
-    g_tntfs_readdir = (tntfs_readdir_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_READDIR_GOT);
-    g_tntfs_closedir = (tntfs_closedir_fn)(uintptr_t)read_got(g_fsys_base, FSYS_TNTFS_CLOSEDIR_GOT);
+    {
+        unsigned long mc_base = a7r3_mod_base("/libInfraMediaCommon.so");
+        unsigned long fsys_plt0 = g_fsys_base + FSYS_PLT0_OFF;
+        if (mc_base) {
+            g_tntfs_fopen = (tntfs_fopen_fn)(uintptr_t)(mc_base + MC_TNTFS_FOPEN);
+            g_tntfs_fread = (tntfs_fread_fn)(uintptr_t)(mc_base + MC_TNTFS_FREAD);
+            g_tntfs_fclose = (tntfs_fclose_fn)(uintptr_t)(mc_base + MC_TNTFS_FCLOSE);
+            g_tntfs_opendir = (tntfs_opendir_fn)(uintptr_t)(mc_base + MC_TNTFS_OPENDIR);
+            g_tntfs_readdir = (tntfs_readdir_fn)(uintptr_t)(mc_base + MC_TNTFS_READDIR);
+            g_tntfs_closedir = (tntfs_closedir_fn)(uintptr_t)(mc_base + MC_TNTFS_CLOSEDIR);
+        } else {
+            uint32_t v;
+            v = read_got(g_fsys_base, FSYS_TNTFS_FOPEN_GOT);
+            g_tntfs_fopen = (v && (unsigned long)v != fsys_plt0) ? (tntfs_fopen_fn)(uintptr_t)v : NULL;
+            v = read_got(g_fsys_base, FSYS_TNTFS_FREAD_GOT);
+            g_tntfs_fread = (v && (unsigned long)v != fsys_plt0) ? (tntfs_fread_fn)(uintptr_t)v : NULL;
+            v = read_got(g_fsys_base, FSYS_TNTFS_FCLOSE_GOT);
+            g_tntfs_fclose = (v && (unsigned long)v != fsys_plt0) ? (tntfs_fclose_fn)(uintptr_t)v : NULL;
+            v = read_got(g_fsys_base, FSYS_TNTFS_OPENDIR_GOT);
+            g_tntfs_opendir = (v && (unsigned long)v != fsys_plt0) ? (tntfs_opendir_fn)(uintptr_t)v : NULL;
+            v = read_got(g_fsys_base, FSYS_TNTFS_READDIR_GOT);
+            g_tntfs_readdir = (v && (unsigned long)v != fsys_plt0) ? (tntfs_readdir_fn)(uintptr_t)v : NULL;
+            v = read_got(g_fsys_base, FSYS_TNTFS_CLOSEDIR_GOT);
+            g_tntfs_closedir = (v && (unsigned long)v != fsys_plt0) ? (tntfs_closedir_fn)(uintptr_t)v : NULL;
+        }
+    }
 
     slot = (volatile unsigned long *)(g_obj_base + LIBOBJ_RECCNT_PARSE_SLOT);
     if (!a7r3_pm_writable((const void *)slot, 4u)) {
