@@ -15,6 +15,8 @@
 #define QID_INPUT_MAIN         0x007a0020u
 #define QID_TP_MAIN            0x007b0026u
 #define EV_SYNTH_TAG           0x5A3E0000u
+#define EV_STATUS_INVALID      0x7fffffffu
+#define EV_STATUS_NOT_FOUND    0x7ffffffeu
 #define EVQ_SZ                 16u
 
 typedef int (*osal_rcv_fn)(unsigned qid, void **msg_out, int timeout);
@@ -59,11 +61,16 @@ static volatile int g_hook_active;
 static volatile int g_swallow_keys;
 static volatile int g_swallow_touch;
 static volatile int g_ev_dial_shield;
+static volatile int g_ev_need_zero_sync[2];
+static volatile unsigned g_ev_getev_spoof_cnt;
 static volatile unsigned g_last_input_qid = QID_INPUT_MAIN;
 static volatile unsigned g_ev_real_code;
 static volatile unsigned g_ev_real_w1;
 static volatile unsigned g_ev_real_w2;
 static volatile int g_ev_real_valid;
+static volatile unsigned g_ev_real_w1_arr[2];
+static volatile unsigned g_ev_real_w2_arr[2];
+static volatile int g_ev_real_valid_arr[2];
 static volatile int g_ev_log_pending;
 static volatile a7r3_ext_dismiss_cb g_ext_cb;
 static volatile a7r3_nonnative_cb g_nonnative_cb;
@@ -80,6 +87,35 @@ static volatile unsigned g_native_act_seq;
 static int is_ev_dial_code(unsigned code)
 {
     return code == A7R3_KEY_EV_DIAL1 || code == A7R3_KEY_EV_DIAL2;
+}
+
+static int is_ev_dial_event(unsigned code)
+{
+    return code == A7R3_EV_EVENT_ID1 || code == A7R3_EV_EVENT_ID2;
+}
+
+static int ev_code_idx(unsigned code)
+{
+    if (code == A7R3_KEY_EV_DIAL1)
+        return 0;
+    if (code == A7R3_KEY_EV_DIAL2)
+        return 1;
+    return -1;
+}
+
+static void record_ev_real(unsigned code, unsigned w1, unsigned w2)
+{
+    int idx = ev_code_idx(code);
+    if (idx < 0 || w1 == EV_STATUS_INVALID || w2 == EV_STATUS_INVALID)
+        return;
+    g_ev_real_w1_arr[idx] = w1;
+    g_ev_real_w2_arr[idx] = w2;
+    g_ev_real_valid_arr[idx] = 1;
+    g_ev_real_code = code;
+    g_ev_real_w1 = w1;
+    g_ev_real_w2 = w2;
+    g_ev_real_valid = 1;
+    a7r3_dsb();
 }
 
 static int is_passive_sensor_event(unsigned code)
@@ -128,13 +164,20 @@ static int nm_osal_rcv_hook(unsigned qid, void **msg_out, int timeout)
                     a7r3_dsb();
                     return rc;
                 }
-                g_ev_real_code = w[0];
-                g_ev_real_w1 = w[1];
-                g_ev_real_w2 = w[2];
-                g_ev_real_valid = 1;
-                g_ev_log_pending = 1;
-                a7r3_dsb();
+                if (w[1] != EV_STATUS_INVALID && w[2] != EV_STATUS_INVALID) {
+                    record_ev_real(w[0], w[1], w[2]);
+                    g_ev_log_pending = 1;
+                    a7r3_dsb();
+                }
                 if (g_ev_dial_shield) {
+                    int idx = ev_code_idx(w[0]);
+                    if (idx >= 0 && g_ev_need_zero_sync[idx]) {
+                        g_ev_need_zero_sync[idx] = 0;
+                        ((unsigned *)msg)[1] = 0u;
+                        ((unsigned *)msg)[2] = 0u;
+                        a7r3_dsb();
+                        return rc;
+                    }
                     if (g_osal_free_msg) {
                         g_osal_free_msg(qid, msg);
                         continue;
@@ -243,14 +286,15 @@ static int nm_osal_rcv_hook(unsigned qid, void **msg_out, int timeout)
 static int ev_get_phy_hook(void *self, int key_code, void *out_data)
 {
     int rc = g_real_get_phy ? g_real_get_phy(self, key_code, out_data) : 0;
-    if (g_ev_dial_shield && is_ev_dial_code((unsigned)key_code)) {
-        if (out_data) {
-            unsigned *p = (unsigned *)out_data;
+    if (is_ev_dial_code((unsigned)key_code) && out_data) {
+        unsigned *p = (unsigned *)out_data;
+        if (g_ev_dial_shield) {
             p[0] = (unsigned)key_code;
             p[1] = 0u;
             p[2] = 0u;
+            p[3] = 0u;
+            return 0;
         }
-        return 0;
     }
     return rc;
 }
@@ -258,12 +302,19 @@ static int ev_get_phy_hook(void *self, int key_code, void *out_data)
 static int ev_get_ev_hook(void *self, int handle, int key_code, void *out_ev)
 {
     int rc = g_real_get_ev ? g_real_get_ev(self, handle, key_code, out_ev) : 0;
-    if (g_ev_dial_shield && is_ev_dial_code((unsigned)key_code)) {
+    if (g_ev_dial_shield &&
+        (is_ev_dial_event((unsigned)key_code) || is_ev_dial_code((unsigned)key_code)) &&
+        rc != (int)EV_STATUS_NOT_FOUND) {
         if (out_ev) {
             unsigned *p = (unsigned *)out_ev;
+            p[0] = (unsigned)key_code;
             p[1] = 0u;
             p[2] = 0u;
+            p[3] = 0u;
+            p[4] = 0u;
+            p[5] = 0u;
         }
+        g_ev_getev_spoof_cnt++;
         return 0;
     }
     return rc;
@@ -306,13 +357,11 @@ static void capture_ev_phy_cache(unsigned *out_nonzero_code,
         const unsigned *p = (const unsigned *)(base + (unsigned long)i * 0x28UL);
         if (!a7r3_pm_readable((const void *)p, 16u))
             break;
-        if (is_ev_dial_code(p[0]) && (p[1] != 0u || p[2] != 0u)) {
-            g_ev_real_code = p[0];
-            g_ev_real_w1 = p[1];
-            g_ev_real_w2 = p[2];
-            g_ev_real_valid = 1;
-            a7r3_dsb();
-            if (out_nonzero_code && *out_nonzero_code == 0u) {
+        if (is_ev_dial_code(p[0]) &&
+            p[1] != EV_STATUS_INVALID && p[2] != EV_STATUS_INVALID) {
+            record_ev_real(p[0], p[1], p[2]);
+            if ((p[1] != 0u || p[2] != 0u) &&
+                out_nonzero_code && *out_nonzero_code == 0u) {
                 *out_nonzero_code = p[0];
                 if (out_w1)
                     *out_w1 = p[1];
@@ -321,6 +370,24 @@ static void capture_ev_phy_cache(unsigned *out_nonzero_code,
             }
         }
     }
+}
+
+static int query_real_ev_dial(unsigned code, unsigned *out_w1, unsigned *out_w2)
+{
+    int idx = ev_code_idx(code);
+
+    if (idx < 0)
+        return 0;
+
+    capture_ev_phy_cache(NULL, NULL, NULL);
+    if (g_ev_real_valid_arr[idx]) {
+        if (out_w1)
+            *out_w1 = g_ev_real_w1_arr[idx];
+        if (out_w2)
+            *out_w2 = g_ev_real_w2_arr[idx];
+        return 1;
+    }
+    return 0;
 }
 
 static int send_input_msg4(unsigned w0, unsigned w1, unsigned w2, unsigned w3)
@@ -449,34 +516,85 @@ void a7r3_input_remove(void)
 
 void a7r3_input_set_ev_dial_shield(int enable)
 {
+    static const unsigned ev_codes[2] = { A7R3_KEY_EV_DIAL1, A7R3_KEY_EV_DIAL2 };
     int on = enable ? 1 : 0;
+    unsigned i;
+
     if (on == g_ev_dial_shield)
         return;
     if (on) {
         unsigned nz_code = 0u, nz_w1 = 0u, nz_w2 = 0u;
-        capture_ev_phy_cache(&nz_code, &nz_w1, &nz_w2);
+        unsigned w1[2] = { 0u, 0u };
+        unsigned w2[2] = { 0u, 0u };
+        int ok[2] = { 0, 0 };
+
+        for (i = 0u; i < 2u; i++) {
+            ok[i] = query_real_ev_dial(ev_codes[i], &w1[i], &w2[i]);
+            if (ok[i] && (w1[i] != 0u || w2[i] != 0u) && nz_code == 0u) {
+                nz_code = ev_codes[i];
+                nz_w1 = w1[i];
+                nz_w2 = w2[i];
+            }
+        }
+        g_ev_need_zero_sync[0] = 0;
+        g_ev_need_zero_sync[1] = 0;
         g_ev_dial_shield = 1;
         a7r3_dsb();
-        if (nz_code != 0u)
-            send_ev_synth(nz_code, 0u, 0u);
+        if (!ok[0] || w1[0] != 0u || w2[0] != 0u)
+            send_ev_synth(ev_codes[0], 0u, 0u);
+        if (ok[1] && (w1[1] != 0u || w2[1] != 0u))
+            send_ev_synth(ev_codes[1], 0u, 0u);
         a7r3_log_hex("SDK_EV_SHIELD=", 1UL);
         a7r3_log_hex("SDK_EV_NZ_CODE=", (unsigned long)nz_code);
         a7r3_log_hex("SDK_EV_NZ_W1=", (unsigned long)nz_w1);
         a7r3_log_hex("SDK_EV_NZ_W2=", (unsigned long)nz_w2);
     } else {
+        g_ev_need_zero_sync[0] = 0;
+        g_ev_need_zero_sync[1] = 0;
         g_ev_dial_shield = 0;
         a7r3_dsb();
-        if (g_ev_real_valid && g_ev_real_code != 0u &&
-            (g_ev_real_w1 != 0u || g_ev_real_w2 != 0u)) {
-            unsigned c = g_ev_real_code;
-            unsigned w1 = g_ev_real_w1;
-            unsigned w2 = g_ev_real_w2;
-            send_ev_synth(c, w1, w2);
-            a7r3_log_hex("SDK_EV_RESYNC_CODE=", (unsigned long)c);
-            a7r3_log_hex("SDK_EV_RESYNC_W1=", (unsigned long)w1);
-            a7r3_log_hex("SDK_EV_RESYNC_W2=", (unsigned long)w2);
+        for (i = 0u; i < 2u; i++) {
+            unsigned rw1 = 0u, rw2 = 0u;
+            if (query_real_ev_dial(ev_codes[i], &rw1, &rw2) &&
+                (rw1 != 0u || rw2 != 0u)) {
+                send_ev_synth(ev_codes[i], rw1, rw2);
+                a7r3_log_hex("SDK_EV_RESYNC_CODE=", (unsigned long)ev_codes[i]);
+                a7r3_log_hex("SDK_EV_RESYNC_W1=", (unsigned long)rw1);
+                a7r3_log_hex("SDK_EV_RESYNC_W2=", (unsigned long)rw2);
+            }
         }
         a7r3_log_hex("SDK_EV_SHIELD=", 0UL);
+    }
+}
+
+void a7r3_input_on_shutdown(void)
+{
+    if (g_ev_dial_shield) {
+        a7r3_log_hex("SDK_EV_SHUTDOWN_RESTORE=", 1UL);
+        a7r3_input_set_ev_dial_shield(0);
+    }
+}
+
+void a7r3_input_on_suspend(void)
+{
+    if (g_ev_dial_shield) {
+        g_ev_need_zero_sync[0] = 1;
+        g_ev_need_zero_sync[1] = 1;
+        a7r3_dsb();
+    }
+}
+
+void a7r3_input_on_resume(void)
+{
+    if (g_ev_dial_shield) {
+        if (g_ev_need_zero_sync[0]) {
+            g_ev_need_zero_sync[0] = 0;
+            g_ev_need_zero_sync[1] = 0;
+            a7r3_dsb();
+            send_ev_synth(A7R3_KEY_EV_DIAL1, 0u, 0u);
+        }
+        a7r3_log_hex("SDK_EV_RESUME_SYNC=", 1UL);
+        a7r3_log_hex("SDK_EV_GETEV_SPOOF=", (unsigned long)g_ev_getev_spoof_cnt);
     }
 }
 

@@ -20,6 +20,8 @@
 /* Physical EV compensation dial codes */
 #define A7R3_KEY_EV_DIAL1     0x70d2u /* KEY_SLI_EV_COMPENSATION */
 #define A7R3_KEY_EV_DIAL2     0x70d3u /* KEY_SLI_EV_COMPENSATION2 */
+#define A7R3_EV_EVENT_ID1     0x15060030u /* InfraInput event for EV dial */
+#define A7R3_EV_EVENT_ID2     0x15060040u /* InfraInput secondary event for EV dial */
 
 struct a7r3_key_ev {
     unsigned code;
@@ -61,6 +63,9 @@ void a7r3_input_set_nonnative_cb(a7r3_nonnative_cb cb);
 /* Shield physical EV compensation dial (0x70d2/0x70d3) so firmware always sees 0. */
 void a7r3_input_set_ev_dial_shield(int enable);
 int  a7r3_input_get_ev_dial_shield(void);
+void a7r3_input_on_shutdown(void);
+void a7r3_input_on_suspend(void);
+void a7r3_input_on_resume(void);
 int  a7r3_input_take_ev_raw(unsigned *out_code, unsigned *out_w1, unsigned *out_w2);
 unsigned a7r3_input_native_activity_seq(void);
 

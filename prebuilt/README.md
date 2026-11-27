@@ -3,9 +3,9 @@
 本目录随仓库直接附带纯原创、零 Sony 固件字节的预编译插件产物：
 
 - **文件**：`demo_native_tab7_ram.so`
-- **对应版本**：`v2.2.1-native-tab7`（源码入口 [`src/entries/demo_native_tab7.c`](../src/entries/demo_native_tab7.c)）
-- **文件大小**：`112,604 bytes`
-- **SHA-256**：`7fd297d0f570efc02efd135384bb007a64ba0bbee302cba832a65783bdfc3ebc`
+- **对应版本**：`v2.2.2-native-tab7`（源码入口 [`src/entries/demo_native_tab7.c`](../src/entries/demo_native_tab7.c)）
+- **文件大小**：`117,592 bytes`
+- **SHA-256**：`6a939a9b8878202cdc50f106991c361082fc922111a671c0009a71a11a4b7482`
 
 ## 合规与使用说明
 

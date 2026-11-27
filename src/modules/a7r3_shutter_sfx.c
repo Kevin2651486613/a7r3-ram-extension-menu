@@ -1,12 +1,19 @@
 #include "a7r3_shutter_sfx.h"
+#include "a7r3_input.h"
 #include "a7r3_sys.h"
 
-/* Verified A7R3 v3.10 libObj.so offsets (ObjStillRecorder & MWF::ObjMsg) */
-#define LIBOBJ_RECCNT_PARSE_SLOT 0x0120615cUL
-#define LIBOBJ_RECCNT_PARSE_REAL 0x008640fdUL /* Thumb */
-#define LIBOBJ_OBJMSG_GETID_GOT  0x0121c040UL
-#define LIBOBJ_OBJMSG_GETPRM_GOT 0x0121b470UL
-#define LIBOBJ_BACKUP_READ_GOT   0x0121c0c0UL
+/* Verified A7R3 v3.10 libObj.so offsets (ObjStillRecorder, MWF::ObjMsg & ObjSystemSound) */
+#define LIBOBJ_RECCNT_PARSE_SLOT   0x0120615cUL
+#define LIBOBJ_RECCNT_PARSE_REAL   0x008640fdUL /* Thumb */
+#define LIBOBJ_OBJMSG_GETID_GOT    0x0121c040UL
+#define LIBOBJ_OBJMSG_GETPRM_GOT   0x0121b470UL
+#define LIBOBJ_BACKUP_READ_GOT     0x0121c0c0UL
+#define LIBOBJ_SYSSND_STOP_SLOT    0x011e0ba0UL
+#define LIBOBJ_SYSSND_STOP_REAL    0x0029283dUL /* Thumb: ObjSystemSound::onStopping */
+#define LIBOBJ_SYSSND_RESUME_SLOT  0x011e0bc0UL
+#define LIBOBJ_SYSSND_RESUME_REAL  0x00292721UL /* Thumb: ObjSystemSound::onResuming */
+#define LIBOBJ_SYSSND_SUSPEND_SLOT 0x011e0bc4UL
+#define LIBOBJ_SYSSND_SUSPEND_REAL 0x00292571UL /* Thumb: ObjSystemSound::onSuspending */
 
 /* Verified A7R3 v3.10 Silent Shutter Backup ID */
 #define BKID_SILENT_SHUTTER      0x01070b2cUL
@@ -155,6 +162,8 @@ struct sfx_sd_entry {
     char path[128];
     char name[28];
     uint32_t file_size;
+    char log_drive;
+    char pf_drive;
 };
 
 static const uint8_t g_builtin_kinds[A7R3_SFX_BUILTIN_CNT] = { 3u };
@@ -170,9 +179,20 @@ static unsigned long g_obj_base;
 static unsigned long g_biz_base;
 static unsigned long g_fsys_base;
 
+typedef int (*syssnd_pm_fn)(void *self);
+
 static volatile unsigned long *g_reccnt_slot;
 static unsigned long g_orig_reccnt;
 static reccnt_parse_fn g_real_reccnt;
+static volatile unsigned long *g_syssnd_stop_slot;
+static unsigned long g_orig_syssnd_stop;
+static syssnd_pm_fn g_real_syssnd_stop;
+static volatile unsigned long *g_syssnd_suspend_slot;
+static unsigned long g_orig_syssnd_suspend;
+static syssnd_pm_fn g_real_syssnd_suspend;
+static volatile unsigned long *g_syssnd_resume_slot;
+static unsigned long g_orig_syssnd_resume;
+static syssnd_pm_fn g_real_syssnd_resume;
 static objmsg_get_id_fn g_msg_get_id;
 static objmsg_get_prm_fn g_msg_get_prm;
 static backup_read_fn g_backup_read;
@@ -229,7 +249,9 @@ static volatile unsigned g_load_seq;
 static volatile unsigned g_rescan_seq;
 static volatile unsigned g_rescan_done_seq;
 static volatile unsigned g_prewarm_seq;
+static volatile unsigned g_resume_seq;
 static volatile unsigned g_wake_seq;
+static volatile int g_suspend_seen;
 static volatile int g_sfx_stop;
 static volatile int g_sfx_thread_running;
 
@@ -238,6 +260,8 @@ static uint16_t g_dmm_handle;
 static uint32_t g_dmm_phy_addr;
 static uint32_t g_dmm_size;
 static int g_adf_custom_registered;
+static unsigned g_adf_enc_len;
+static int g_adf_enc_sd_idx = -1;
 
 static uint8_t g_adf_ch[0x40];
 static int g_adf_ready;
@@ -646,15 +670,9 @@ static int acquire_drive(char drive, void **out_drv, int *out_mutex, uint8_t *ou
     return 0;
 }
 
-static int load_sd_sound_into_adf(int sd_idx)
+static int register_adf_enc_into_dmm(unsigned enc_len, int sd_idx)
 {
-    void *drv = NULL;
-    int mutex_id = 0;
-    uint8_t fs_type = 0;
-    const char *path;
-    unsigned total = 0;
     int rc;
-    unsigned enc_len = 0;
     uint8_t dmm[0x40];
     uint8_t adf[0x40];
     uint8_t pmem[0x30];
@@ -662,77 +680,12 @@ static int load_sd_sound_into_adf(int sd_idx)
     uint8_t open_resp[0x20];
     void *va;
 
-    if (sd_idx < 0 || sd_idx >= g_sd_count)
-        return -1;
-    if (!g_fsys_set_ctx || !g_pf2_fopen || !g_pf2_fread || !g_pf2_fclose ||
-        !g_dmm_ctor || !g_dmm_alloc_new || !g_dmm_open || !g_dmm_dtor ||
+    if (!g_dmm_ctor || !g_dmm_alloc_new || !g_dmm_open || !g_dmm_dtor ||
         !g_phyc_ctor || !g_phyc_getlog || !g_phyc_dtor ||
-        !g_adf_ctor || !g_adf_set_table || !g_adf_dtor)
+        !g_adf_ctor || !g_adf_set_table || !g_adf_dtor || enc_len < 64u)
         return -1;
 
     release_custom_sound_dma();
-
-    path = g_sd_files[sd_idx].path;
-    if (acquire_drive(path[0], &drv, &mutex_id, &fs_type) != 0) {
-        a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0002UL);
-        return -1;
-    }
-
-    if (fs_type != 0x10u) {
-        void *ctx = *(void *const *)((const uint8_t *)drv + 0x250);
-        void *fp;
-        g_fsys_set_ctx(ctx);
-        fp = g_pf2_fopen(path, "r");
-        if (!fp) {
-            g_fsys_unlock_dev(mutex_id);
-            a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0001UL);
-            return -1;
-        }
-        while (total < WAV_RAW_CAP) {
-            uint32_t got = g_pf2_fread(g_wav_raw + total, 1u, WAV_RAW_CAP - total, fp);
-            if (got == 0u)
-                break;
-            total += got;
-        }
-        g_pf2_fclose(fp);
-    } else if (g_tntfs_fopen && g_tntfs_fread && g_tntfs_fclose) {
-        void *fp = g_tntfs_fopen(path, "rb");
-        if (!fp) {
-            g_fsys_unlock_dev(mutex_id);
-            a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0003UL);
-            return -1;
-        }
-        while (total < WAV_RAW_CAP) {
-            int got = g_tntfs_fread(fp, g_wav_raw + total, (int)(WAV_RAW_CAP - total));
-            if (got <= 0)
-                break;
-            total += (unsigned)got;
-        }
-        g_tntfs_fclose(fp);
-    } else {
-        g_fsys_unlock_dev(mutex_id);
-        a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0004UL);
-        return -1;
-    }
-    g_fsys_unlock_dev(mutex_id);
-
-    if (total < 64u) {
-        a7r3_log_hex("SDK_SFX_SHORT=", (unsigned long)total);
-        return -1;
-    }
-
-    if (ends_with_ci4(g_sd_files[sd_idx].name, ".bin")) {
-        enc_len = (total > ADF_ENC_CAP) ? ADF_ENC_CAP : total;
-        enc_len &= ~63u;
-        if (enc_len < 64u)
-            return -1;
-        mem_copy(g_adf_enc, g_wav_raw, enc_len);
-    } else {
-        if (encode_wav_to_adf(g_wav_raw, total, g_adf_enc, ADF_ENC_CAP, &enc_len) != 0) {
-            a7r3_log_str("SDK_SFX_WAV_ERR\n");
-            return -1;
-        }
-    }
 
     mem_zero(dmm, sizeof(dmm));
     mem_zero(&alc, sizeof(alc));
@@ -797,6 +750,95 @@ static int load_sd_sound_into_adf(int sd_idx)
     return 0;
 }
 
+static int load_sd_sound_into_adf(int sd_idx)
+{
+    void *drv = NULL;
+    int mutex_id = 0;
+    uint8_t fs_type = 0;
+    const char *path;
+    char log_drive;
+    unsigned total = 0;
+    unsigned enc_len = 0;
+
+    if (sd_idx < 0 || sd_idx >= g_sd_count)
+        return -1;
+    if (!g_fsys_set_ctx || !g_pf2_fopen || !g_pf2_fread || !g_pf2_fclose)
+        return -1;
+
+    release_custom_sound_dma();
+    g_adf_enc_len = 0u;
+    g_adf_enc_sd_idx = -1;
+
+    path = g_sd_files[sd_idx].path;
+    log_drive = g_sd_files[sd_idx].log_drive;
+    if (log_drive < 'A' || log_drive > 'Z')
+        log_drive = path[0];
+    if (acquire_drive(log_drive, &drv, &mutex_id, &fs_type) != 0) {
+        a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0002UL);
+        return -1;
+    }
+
+    if (fs_type != 0x10u) {
+        void *ctx = *(void *const *)((const uint8_t *)drv + 0x250);
+        void *fp;
+        g_fsys_set_ctx(ctx);
+        fp = g_pf2_fopen(path, "r");
+        if (!fp) {
+            g_fsys_unlock_dev(mutex_id);
+            a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0001UL);
+            return -1;
+        }
+        while (total < WAV_RAW_CAP) {
+            uint32_t got = g_pf2_fread(g_wav_raw + total, 1u, WAV_RAW_CAP - total, fp);
+            if (got == 0u)
+                break;
+            total += got;
+        }
+        g_pf2_fclose(fp);
+    } else if (g_tntfs_fopen && g_tntfs_fread && g_tntfs_fclose) {
+        void *fp = g_tntfs_fopen(path, "rb");
+        if (!fp) {
+            g_fsys_unlock_dev(mutex_id);
+            a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0003UL);
+            return -1;
+        }
+        while (total < WAV_RAW_CAP) {
+            int got = g_tntfs_fread(fp, g_wav_raw + total, (int)(WAV_RAW_CAP - total));
+            if (got <= 0)
+                break;
+            total += (unsigned)got;
+        }
+        g_tntfs_fclose(fp);
+    } else {
+        g_fsys_unlock_dev(mutex_id);
+        a7r3_log_hex("SDK_SFX_OPEN_ERR=", 0xdead0004UL);
+        return -1;
+    }
+    g_fsys_unlock_dev(mutex_id);
+
+    if (total < 64u) {
+        a7r3_log_hex("SDK_SFX_SHORT=", (unsigned long)total);
+        return -1;
+    }
+
+    if (ends_with_ci4(g_sd_files[sd_idx].name, ".bin")) {
+        enc_len = (total > ADF_ENC_CAP) ? ADF_ENC_CAP : total;
+        enc_len &= ~63u;
+        if (enc_len < 64u)
+            return -1;
+        mem_copy(g_adf_enc, g_wav_raw, enc_len);
+    } else {
+        if (encode_wav_to_adf(g_wav_raw, total, g_adf_enc, ADF_ENC_CAP, &enc_len) != 0) {
+            a7r3_log_str("SDK_SFX_WAV_ERR\n");
+            return -1;
+        }
+    }
+
+    g_adf_enc_len = enc_len;
+    g_adf_enc_sd_idx = sd_idx;
+    return register_adf_enc_into_dmm(enc_len, sd_idx);
+}
+
 static void resolve_active_sound(uint8_t *out_kind, uint8_t *out_vol)
 {
     int sel = g_selected_idx;
@@ -846,6 +888,64 @@ static void prewarm_adf(void)
     }
 }
 
+static void reinit_adf_after_resume(void)
+{
+    if (!g_adf_ctor || !g_adf_dtor)
+        return;
+    if (g_adf_ready) {
+        g_adf_dtor(g_adf_ch);
+        g_adf_ready = 0;
+    }
+    mem_zero(g_adf_ch, sizeof(g_adf_ch));
+    g_adf_ctor(g_adf_ch, (uint16_t)ADF_UNIT_ID);
+    g_adf_ready = 1;
+    g_applied_vol = 0xffu;
+    g_applied_kind = 0xffu;
+
+    if (g_selected_idx >= A7R3_SFX_BUILTIN_CNT) {
+        int sd_idx = g_selected_idx - A7R3_SFX_BUILTIN_CNT;
+        if (g_adf_enc_sd_idx == sd_idx && g_adf_enc_len >= 64u)
+            (void)register_adf_enc_into_dmm(g_adf_enc_len, sd_idx);
+        else
+            (void)load_sd_sound_into_adf(sd_idx);
+    }
+    g_suspend_seen = 0;
+    a7r3_dsb();
+    if (g_sfx_mode != A7R3_SFX_MODE_OFF)
+        prewarm_adf();
+    a7r3_input_on_resume();
+    a7r3_log_hex("SDK_SFX_RESUMED=",
+                 (unsigned long)(1u | ((unsigned)g_adf_custom_registered << 4)));
+}
+
+__attribute__((noinline))
+static int syssnd_on_stopping_hook(void *self)
+{
+    a7r3_input_on_shutdown();
+    return g_real_syssnd_stop(self);
+}
+
+__attribute__((noinline))
+static int syssnd_on_suspending_hook(void *self)
+{
+    g_suspend_seen = 1;
+    g_applied_vol = 0xffu;
+    g_applied_kind = 0xffu;
+    a7r3_input_on_suspend();
+    a7r3_dsb();
+    a7r3_log_hex("SDK_SFX_SUSPEND=", 1UL);
+    return g_real_syssnd_suspend(self);
+}
+
+__attribute__((noinline))
+static int syssnd_on_resuming_hook(void *self)
+{
+    int rc = g_real_syssnd_resume(self);
+    g_resume_seq++;
+    wake_sfx_worker();
+    return rc;
+}
+
 static void play_current_sound(int is_preview, unsigned trig_no)
 {
     uint8_t kind_id;
@@ -855,6 +955,9 @@ static void play_current_sound(int is_preview, unsigned trig_no)
 
     if (!g_adf_ready || !g_adf_set_vol || !g_adf_set_path || !g_adf_request)
         return;
+
+    if (g_suspend_seen)
+        reinit_adf_after_resume();
 
     resolve_active_sound(&kind_id, &vol);
     if (vol != g_applied_vol || kind_id != g_applied_kind) {
@@ -927,8 +1030,22 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
     if (acquire_drive(drive, &drv, &mutex_id, &fs_type) != 0)
         return;
 
+    {
+        const char *dev_name = (const char *)drv + 0x954;
+        if (a7r3_pm_readable(dev_name, 11u) && a7r3_bytes_eq(dev_name, "/dev/nflash", 11u)) {
+            g_fsys_unlock_dev(mutex_id);
+            return;
+        }
+    }
+
     if (fs_type != 0x10u) {
-        pat[p++] = drive;
+        char pf_main = *((const char *)drv + 0x0a);
+        char pf_used;
+        if (pf_main < 'A' || pf_main > 'Z')
+            pf_main = drive;
+        pf_used = pf_main;
+
+        pat[p++] = pf_main;
         pat[p++] = ':';
         pat[p++] = '\\';
         {
@@ -948,8 +1065,24 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
         if (subdir[0] == 'S' && subdir[1] == 'H') {
             a7r3_log_hex("SDK_SFX_SCAN_RC=",
                          ((unsigned long)(uint8_t)drive << 24) |
-                         ((unsigned long)fs_type << 16) |
+                         ((unsigned long)(uint8_t)pf_main << 16) |
                          ((unsigned long)rc & 0xffffu));
+        }
+        if (rc != 0 && (pf_main == 'A' || pf_main == 'C' || pf_main == 'E')) {
+            char pf_alt = (char)(pf_main + 1);
+            pat[0] = pf_alt;
+            if (a7r3_pm_writable((uint8_t *)drv + 0x254, 1u))
+                ((uint8_t *)drv)[0x254] = 0u;
+            mem_zero(g_find_info, sizeof(g_find_info));
+            rc = g_prfile_fsfirst(drv, pat, 0x80u, g_find_info);
+            if (subdir[0] == 'S' && subdir[1] == 'H') {
+                a7r3_log_hex("SDK_SFX_SCAN_ALT=",
+                             ((unsigned long)(uint8_t)drive << 24) |
+                             ((unsigned long)(uint8_t)pf_alt << 16) |
+                             ((unsigned long)rc & 0xffffu));
+            }
+            if (rc == 0)
+                pf_used = pf_alt;
         }
         while (rc == 0 && *io_cnt < A7R3_SFX_MAX_SD_FILES) {
             const char *fname = *(const char *const *)g_find_info;
@@ -960,7 +1093,7 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
                 (ends_with_ci4(fname, ".wav") || ends_with_ci4(fname, ".bin"))) {
                 struct sfx_sd_entry *e = &g_sd_files[*io_cnt];
                 unsigned k = 0;
-                e->path[k++] = drive;
+                e->path[k++] = pf_used;
                 e->path[k++] = ':';
                 e->path[k++] = '\\';
                 {
@@ -972,6 +1105,8 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
                 str_copy_cap(e->path + k, fname, sizeof(e->path) - k);
                 str_copy_cap(e->name, fname, sizeof(e->name));
                 e->file_size = fsz;
+                e->log_drive = drive;
+                e->pf_drive = pf_used;
                 (*io_cnt)++;
             }
             rc = g_prfile_fsnext(drv, g_find_info);
@@ -1021,6 +1156,8 @@ static void scan_sd_dir_prfile(char drive, const char *subdir, int *io_cnt)
                     }
                     str_copy_cap(e->name, fname, sizeof(e->name));
                     e->file_size = 0u;
+                    e->log_drive = drive;
+                    e->pf_drive = drive;
                     (*io_cnt)++;
                 }
             }
@@ -1057,6 +1194,8 @@ static void do_rescan_sd(void)
 
     g_sd_count = cnt;
     g_loaded_sd_idx = -1;
+    g_adf_enc_len = 0u;
+    g_adf_enc_sd_idx = -1;
     if (g_selected_idx >= A7R3_SFX_BUILTIN_CNT + cnt)
         g_selected_idx = 0;
     a7r3_dsb();
@@ -1101,6 +1240,7 @@ static void *sfx_worker(void *arg)
     unsigned last_load = g_load_seq;
     unsigned last_rescan = g_rescan_seq;
     unsigned last_prewarm = g_prewarm_seq;
+    unsigned last_resume = g_resume_seq;
 
     (void)arg;
     g_sfx_thread_running = 1;
@@ -1115,6 +1255,12 @@ static void *sfx_worker(void *arg)
     while (!g_sfx_stop) {
         unsigned w;
 
+        if (g_resume_seq != last_resume) {
+            last_resume = g_resume_seq;
+            a7r3_nanosleep_ms(250u);
+            if (!g_sfx_stop)
+                reinit_adf_after_resume();
+        }
         if (g_rescan_seq != last_rescan) {
             last_rescan = g_rescan_seq;
             do_rescan_sd();
@@ -1151,6 +1297,7 @@ static void *sfx_worker(void *arg)
         w = g_wake_seq;
         a7r3_dsb();
         if (!g_sfx_stop &&
+            g_resume_seq == last_resume &&
             g_rescan_seq == last_rescan &&
             g_load_seq == last_load &&
             g_trigger_seq == last_trig &&
@@ -1267,6 +1414,36 @@ int a7r3_shutter_sfx_install(void)
     *slot = (unsigned long)(uintptr_t)parse_reccnt_hook;
     a7r3_dsb();
 
+    {
+        volatile unsigned long *s_stop = (volatile unsigned long *)(g_obj_base + LIBOBJ_SYSSND_STOP_SLOT);
+        volatile unsigned long *s_sus  = (volatile unsigned long *)(g_obj_base + LIBOBJ_SYSSND_SUSPEND_SLOT);
+        volatile unsigned long *s_res  = (volatile unsigned long *)(g_obj_base + LIBOBJ_SYSSND_RESUME_SLOT);
+        if (a7r3_pm_writable((const void *)s_stop, 4u) &&
+            a7r3_pm_writable((const void *)s_sus, 4u) &&
+            a7r3_pm_writable((const void *)s_res, 4u) &&
+            *s_stop == g_obj_base + LIBOBJ_SYSSND_STOP_REAL &&
+            *s_sus  == g_obj_base + LIBOBJ_SYSSND_SUSPEND_REAL &&
+            *s_res  == g_obj_base + LIBOBJ_SYSSND_RESUME_REAL) {
+            g_orig_syssnd_stop    = *s_stop;
+            g_orig_syssnd_suspend = *s_sus;
+            g_orig_syssnd_resume  = *s_res;
+            g_real_syssnd_stop    = (syssnd_pm_fn)(uintptr_t)g_orig_syssnd_stop;
+            g_real_syssnd_suspend = (syssnd_pm_fn)(uintptr_t)g_orig_syssnd_suspend;
+            g_real_syssnd_resume  = (syssnd_pm_fn)(uintptr_t)g_orig_syssnd_resume;
+            g_syssnd_stop_slot    = s_stop;
+            g_syssnd_suspend_slot = s_sus;
+            g_syssnd_resume_slot  = s_res;
+            a7r3_dsb();
+            *s_stop = (unsigned long)(uintptr_t)syssnd_on_stopping_hook;
+            *s_sus  = (unsigned long)(uintptr_t)syssnd_on_suspending_hook;
+            *s_res  = (unsigned long)(uintptr_t)syssnd_on_resuming_hook;
+            a7r3_dsb();
+            a7r3_log_hex("SDK_SFX_PM_HOOK=", 1UL);
+        } else {
+            a7r3_log_hex("SDK_SFX_PM_HOOK=", 0UL);
+        }
+    }
+
     g_sfx_stop = 0;
     g_sfx_installed = 1;
     if (pcreate)
@@ -1292,6 +1469,19 @@ void a7r3_shutter_sfx_uninstall(void)
         a7r3_dsb();
         a7r3_log_str("SDK_SFX_RESTORED=0x1\n");
     }
+    if (g_syssnd_stop_slot && g_orig_syssnd_stop) {
+        *g_syssnd_stop_slot = g_orig_syssnd_stop;
+        g_syssnd_stop_slot = NULL;
+    }
+    if (g_syssnd_suspend_slot && g_orig_syssnd_suspend) {
+        *g_syssnd_suspend_slot = g_orig_syssnd_suspend;
+        g_syssnd_suspend_slot = NULL;
+    }
+    if (g_syssnd_resume_slot && g_orig_syssnd_resume) {
+        *g_syssnd_resume_slot = g_orig_syssnd_resume;
+        g_syssnd_resume_slot = NULL;
+    }
+    a7r3_dsb();
 
     for (spin = 0; spin < 200 && g_sfx_thread_running; spin++)
         a7r3_nanosleep_ms(2u);
