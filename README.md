@@ -129,6 +129,36 @@
 
 ---
 
+### 方式三：手机（Android + Termux，免 root）
+
+没有电脑时，可以用一台 Android 手机通过 OTG 线完成同样的纯 RAM 注入。
+完整文档见 [`mobile/README.md`](mobile/README.md)。
+
+**前提**：Termux（F-Droid 版）+ **Termux:API** 应用 + OTG 数据线；
+相机 `MENU -> 设置(黄箱子) -> USB连接` 设为 **大容量存储 (Mass Storage)**。
+
+```bash
+pkg install -y git
+git clone https://github.com/Kevin2651486613/a7r3-ram-extension-menu
+cd a7r3-ram-extension-menu
+bash mobile/install.sh      # 装依赖 + 汇编器自检 + 注册 inject 命令
+inject                      # 插上相机后，一条命令完成注入
+```
+
+它会自动扫描设备、切 Service Mode、等待 `054C:0336` 重枚举，再部署插件；
+免 root，全程零 Flash 写入。若相机已在服务模式会跳过切换直接部署，
+所以中途失败后重跑一次 `inject` 即可续跑。
+
+> 原生 keystone 在 aarch64 的 Termux 上没有可用轮子，
+> [`mobile/termux/keystone.py`](mobile/termux/keystone.py) 把同一接口转发给 Termux 自带的
+> `llvm-mc` + `ld.lld` + `llvm-objcopy`，输出与真 keystone 逐字节一致
+> （`mobile/termux/selftest.py` 可验证）。
+
+> 已知限制：每次开机都要重新注入；首次会弹 USB 授权框；
+> 免 root 依赖机型允许内核 detach，部分机型会报 `BUSY`，此时只能改用电脑或 root。
+
+---
+
 ## 安全边界与 Fail-Closed 设计
 
 1. **零 Flash / NAND 写入**：所有部署文件和运行时日志严格限制在 `/tmp_bt/`；部署前强制验证 `/tmp_bt` 为 `tmpfs` 挂载点且剩余空间充足，断电重启即彻底清空。
@@ -183,6 +213,10 @@ a7r3-ram-extension-menu/
 │   ├── gen_md3_assets.py              # （归档）仅 legacy MD3 使用
 │   ├── vendor/pmca/                   # 内置精简版 USB/Senser 通信层（ma1co/Sony-PMCA-RE, MIT）
 │   └── ram_loader/                    # 纯 RAM 注入助手（MIT 清洁室内置实现）
+├── mobile/                            # 手机注入方案（Android + Termux，免 root）
+│   ├── README.md                      # 手机端原理、安装、使用与故障排查
+│   ├── install.sh                     # Termux 一键安装（依赖 + 汇编器自检 + inject 命令）
+│   └── termux/                        # inject / 切模式 / 部署 / LLVM 汇编垫片
 └── docs/
     ├── ARCHITECTURE.md                # 总体架构、纯 RAM 注入与各模块实现思路
     ├── FIRMWARE_OFFSETS_V310.md       # A7R3 v3.10 互操作性地址偏移与通信协议笔记
@@ -230,3 +264,4 @@ a7r3-ram-extension-menu/
 - [工具链配置、编译约束与部署指南 (docs/TOOLS_AND_BUILD.md)](docs/TOOLS_AND_BUILD.md)
 - [实机调试踩坑记录与根因分析 (docs/LESSONS_LEARNED.md)](docs/LESSONS_LEARNED.md)
 - [给 AI Agent 的环境准备与离线自检提示词 (docs/AGENT_PROMPT.md)](docs/AGENT_PROMPT.md)
+- [手机注入方案（Android + Termux，免 root）(mobile/README.md)](mobile/README.md)

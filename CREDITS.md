@@ -22,11 +22,15 @@
 | **LLVM / Clang + LLD** | [llvm/llvm-project](https://github.com/llvm/llvm-project) | Apache-2.0 with LLVM-exception | 交叉编译 ARMv7-A freestanding `.so` 与 ELF 校验（`clang` / `ld.lld` / `llvm-readelf`；使用预编译 Release `.so` 时不需要） |
 | **Keystone Engine** | [keystone-engine/keystone](https://github.com/keystone-engine/keystone) | GPLv2 | 宿主机端汇编远程 ARM ELF 工具（`tools/ram_loader/` 自身为 MIT 清洁室实现） |
 | **PyUSB / libusb** | [pyusb/pyusb](https://github.com/pyusb/pyusb) & [libusb/libusb](https://github.com/libusb/libusb) | BSD-3-Clause / LGPL-2.1 | 跨平台 USB 底层读写接口 |
+| **Termux / Termux:API** | [termux/termux-api](https://github.com/termux/termux-api) & [termux/termux-packages](https://github.com/termux/termux-packages) | **GPL-3.0**（termux-api）；其余各包按上游协议 | `mobile/` 手机方案在 Android 上的运行环境，提供 `termux-usb` 文件描述符桥接；不随仓库分发，由用户从 Termux 软件源安装 |
+| **python-libusb1** | [vpelletier/python-libusb1](https://github.com/vpelletier/python-libusb1) | **LGPL-2.1** | `mobile/` 手机方案中把 `termux-usb` 传入的 fd 包装为 libusb 句柄（`libusb_wrap_sys_device`）；不随仓库分发 |
 | **PyCryptodomex** | [Legrandin/pycryptodome](https://github.com/Legrandin/pycryptodome) | BSD-2-Clause / Public Domain | Senser 认证握手所需的 SHA-256 哈希计算 |
 | **FFmpeg**（可选） | [FFmpeg](https://ffmpeg.org/) | LGPL / GPL | 将外部音频转换为机内兼容的 24 kHz 单声道 16-bit PCM `.wav` |
 | **Pillow**（可选/归档） | [python-pillow/Pillow](https://github.com/python-pillow/Pillow) | HPND | 仅用于手动编译已暂停的 `src/legacy/` MD3 归档路线生成点阵字模（Tab7 主线不需要） |
 
 > 注：纯 RAM 注入所需的 [terminal_shell.py](tools/ram_loader/terminal_shell.py)、[build_mem_writer.py](tools/ram_loader/build_mem_writer.py)、[build_show_hex.py](tools/ram_loader/build_show_hex.py) 与 [build_ram_tools.py](tools/ram_loader/build_ram_tools.py) 均采用清洁室方式基于 MIT 协议从零实现，仅调用内置精简版 `tools/vendor/pmca/` 的终端收发接口与 Linux 标准系统调用。
+
+> 注：`mobile/` 手机方案**不依赖 Keystone** —— aarch64 的 Termux 暂无可用轮子，[mobile/termux/keystone.py](mobile/termux/keystone.py) 把同一调用接口转发给 Termux 软件源的 `llvm-mc` / `ld.lld` / `llvm-objcopy`，因此复用上表中的 LLVM 依赖即可，且输出与真 keystone 逐字节一致（[mobile/termux/selftest.py](mobile/termux/selftest.py) 可验证）。
 
 ---
 
