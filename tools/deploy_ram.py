@@ -480,10 +480,22 @@ def get_verified_im_pid(sh, force: bool = False) -> int:
 
 
 def check_tmpbt_space(sh, need_bytes: int) -> None:
-    mounts = sh("/bin/busybox grep ' /tmp_bt ' /proc/mounts")
-    if not re.search(r"^\S+\s+/tmp_bt\s+tmpfs\s", mounts, re.M):
+    mounts = sh("/bin/busybox grep ' /tmp_bt ' /proc/mounts").strip()
+    is_tmpfs = bool(re.search(r"^\S+\s+/tmp_bt\s+tmpfs\s", mounts, re.M))
+    if is_tmpfs:
+        sh("mount -o remount,size=16M /tmp_bt")
+    elif not mounts:
+        # Sony's BTUtils only mounts /tmp_bt tmpfs when Bluetooth is enabled.
+        # If Bluetooth is OFF or Airplane Mode is ON, mount a pure-RAM 16M tmpfs ourselves.
+        if "DIR_OK" not in sh("if [ -d /tmp_bt ]; then echo DIR_OK; fi"):
+            raise RuntimeError("/tmp_bt 目录不存在，拒绝继续以保护 Flash")
+        print("[*] 检测到相机未挂载 /tmp_bt（可能关闭了蓝牙或开启了飞行模式），正在挂载 16M 纯内存 tmpfs（零 Flash 写入）...")
+        sh("mount -t tmpfs -o size=16M none /tmp_bt")
+        mounts = sh("/bin/busybox grep ' /tmp_bt ' /proc/mounts").strip()
+        if not re.search(r"^\S+\s+/tmp_bt\s+tmpfs\s", mounts, re.M):
+            raise RuntimeError(f"挂载 /tmp_bt tmpfs 失败，拒绝继续以保护 Flash: {mounts!r}")
+    else:
         raise RuntimeError(f"/tmp_bt 不是 tmpfs 分区，拒绝继续以保护 Flash: {mounts!r}")
-    sh("mount -o remount,size=16M /tmp_bt")
     df_out = sh("/bin/busybox df -k /tmp_bt 2>/dev/null || true")
     avail_kb = None
     for line in df_out.splitlines()[1:]:
