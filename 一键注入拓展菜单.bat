@@ -5,8 +5,17 @@ title Sony A7R3 One-Click Pure-RAM Injector
 net session >nul 2>&1
 if errorlevel 1 (
     echo [*] Requesting Administrator privilege for automatic Sony USB driver setup/restore...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '%*' -WorkingDirectory '%~dp0' -Verb RunAs"
-    exit /b
+    set "_A7R3_SELF=%~f0"
+    set "_A7R3_DIR=%~dp0"
+    set "_A7R3_ARGS=%*"
+    powershell -NoProfile -Command "if ($env:_A7R3_ARGS) { Start-Process -FilePath $env:_A7R3_SELF -ArgumentList $env:_A7R3_ARGS -WorkingDirectory $env:_A7R3_DIR -Verb RunAs } else { Start-Process -FilePath $env:_A7R3_SELF -WorkingDirectory $env:_A7R3_DIR -Verb RunAs }"
+    if errorlevel 1 (
+        echo [!] Administrator elevation failed or was cancelled.
+        echo     Please right-click this file and choose "Run as administrator".
+        pause
+        exit /b 1
+    )
+    exit /b 0
 )
 
 cd /d "%~dp0"

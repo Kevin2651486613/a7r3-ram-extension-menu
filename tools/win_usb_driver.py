@@ -29,9 +29,13 @@ BACKUP_FILE = SDK_DIR / "build" / "driver_backup.json"
 WINDOWS_INF_DIR = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "INF"
 
 SONY_VID = 0x054C
+A7R3_MSC_PID = 0x0BFF
 SENSER_PIDS = (0x0336, 0x02A9)
-KNOWN_LIBUSB_PROVIDERS = ("libusb-win32", "libusb0", "libwdi")
+KNOWN_LIBUSB_PROVIDERS = ("libusb-win32", "libusb0", "libusbk", "libwdi")
 LIBUSB_WIN32_CLASS_GUID = "{EB781AAF-9C70-4523-A5DF-642A87ECA567}"
+LIBUSBK_CLASS_GUID = "{ECFB0CFD-74C4-4F52-BBF7-343461CD72AC}"
+_NON_CAMERA_CLASSES = ("wpd", "hidclass", "media", "audioendpoint", "bluetooth", "net", "ports")
+_NON_CAMERA_SERVICES = ("hidusb", "wudfwpdmtp", "bthusb")
 
 _HIDDEN_SUBPROCESS_KW: dict = (
     {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
@@ -106,14 +110,15 @@ def _decode_inf_text(raw: bytes) -> str:
         return raw.decode("latin-1", errors="replace")
 
 
-def list_sony_pnp_devices() -> list[dict]:
+def list_sony_pnp_devices(present_only: bool = True) -> list[dict]:
     """Query Windows PnP Sony USB devices as normalized dicts (locale-independent)."""
     if not is_windows():
         return []
+    pnp_src = "Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue" if present_only else "Get-PnpDevice -ErrorAction SilentlyContinue"
     ps_cmd = (
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-        "Get-PnpDevice | Where-Object { $_.InstanceId -match '^USB\\\\VID_054C&PID_' } "
-        "| Select-Object Status,Class,FriendlyName,InstanceId,Service "
+        f"{pnp_src} | Where-Object {{ $_.InstanceId -match '^USB\\\\VID_054C&PID_' }} "
+        "| Select-Object Present,Status,Class,FriendlyName,InstanceId,Service "
         "| ConvertTo-Json -Compress"
     )
     res = subprocess.run(
@@ -140,15 +145,19 @@ def list_sony_pnp_devices() -> list[dict]:
         if not m:
             continue
         status = str(item.get("Status") or "")
+        status_upper = status.upper()
         service = str(item.get("Service") or "")
         cls = str(item.get("Class") or "")
+        # Newly enumerated driverless devices (e.g. 054C:0336) have Present=True and Status='Error'.
+        present = bool(item["Present"]) if "Present" in item else (status_upper in ("OK", "ERROR", "DEGRADED"))
         result.append(
             {
                 "vid": int(m.group(1), 16),
                 "pid": int(m.group(2), 16),
                 "instance_id": inst,
                 "status": status,
-                "present": status.upper() == "OK",
+                "status_upper": status_upper,
+                "present": present,
                 "class_name": cls,
                 "friendly_name": str(item.get("FriendlyName") or ""),
                 "service": service,
@@ -159,7 +168,7 @@ def list_sony_pnp_devices() -> list[dict]:
 
 
 def find_sony_libusb_infs(pids: set[int] | None = None) -> list[dict]:
-    """Scan C:\\Windows\\INF\\oem*.inf directly (locale-independent) for Sony libusb-win32 INFs."""
+    """Scan C:\\Windows\\INF\\oem*.inf directly (locale-independent) for Sony libusb-win32 / libusbK / libwdi INFs."""
     if not is_windows() or not WINDOWS_INF_DIR.is_dir():
         return []
     found: list[dict] = []
@@ -173,8 +182,11 @@ def find_sony_libusb_infs(pids: set[int] | None = None) -> list[dict]:
             continue
         is_libusb = (
             LIBUSB_WIN32_CLASS_GUID.lower() in low
+            or LIBUSBK_CLASS_GUID.lower() in low
             or "libusb-win32" in low
             or "libusb0.sys" in low
+            or "libusbk.sys" in low
+            or "libusbk" in low
             or "libwdi" in low
         )
         if not is_libusb:
@@ -265,7 +277,14 @@ def install_libusb0_for_pid(
     bound = False
     while time.time() < deadline:
         devs = list_sony_pnp_devices()
-        if any(d["present"] and d["vid"] == vid and d["pid"] == pid and d["service_lower"] == "libusb0" for d in devs):
+        if any(
+            d["present"]
+            and d.get("status_upper", str(d["status"]).upper()) == "OK"
+            and d["vid"] == vid
+            and d["pid"] == pid
+            and d["service_lower"] == "libusb0"
+            for d in devs
+        ):
             bound = True
             break
         time.sleep(0.5)
@@ -294,23 +313,37 @@ def ensure_camera_driver_for_entry() -> dict:
 
     for d in present:
         if d["pid"] in SENSER_PIDS:
-            if d["service_lower"] != "libusb0":
-                install_libusb0_for_pid(SONY_VID, d["pid"], "Sony Service Mode (Temp libusb)")
-            else:
+            status_up = d.get("status_upper", str(d["status"]).upper())
+            if d["service_lower"] == "libusb0" and status_up == "OK":
                 print(f"[*] 服务模式设备 0x054C:0x{d['pid']:04X} 已使用 libusb-win32。")
+            else:
+                cur_drv = d["service"] or "无驱动"
+                print(f"[*] 服务模式设备 0x054C:0x{d['pid']:04X} 当前驱动为 {cur_drv} (Status={d['status']})，正在切换为 libusb-win32...")
+                install_libusb0_for_pid(SONY_VID, d["pid"], "Sony Service Mode (Temp libusb)")
             return {"mode": "senser", "pid": d["pid"]}
 
     msc_devs = [
         d for d in present
-        if d["service_lower"] in ("usbstor", "libusb0")
-        or d["class_name"].lower() in ("usb", "libusb-win32 devices")
+        if d["class_name"].lower() not in _NON_CAMERA_CLASSES
+        and d["service_lower"] not in _NON_CAMERA_SERVICES
+        and "mtp" not in d["service_lower"]
+        and (
+            d["service_lower"] in ("usbstor", "libusb0", "libusbk", "winusb")
+            or d["class_name"].lower() in ("usb", "libusb-win32 devices", "libusbk usb devices", "usbdevice")
+            or (d["pid"] == A7R3_MSC_PID and not d["service_lower"])
+        )
     ]
+    msc_devs.sort(key=lambda d: 0 if d["pid"] == A7R3_MSC_PID else 1)
     if msc_devs:
         d = msc_devs[0]
-        if d["service_lower"] != "libusb0":
-            install_libusb0_for_pid(SONY_VID, d["pid"], "Sony ILCE-7RM3 MSC (Temp libusb)")
-        else:
+        status_up = d.get("status_upper", str(d["status"]).upper())
+        if d["service_lower"] == "libusb0" and status_up == "OK":
             print(f"[*] 大容量存储设备 0x054C:0x{d['pid']:04X} 已使用 libusb-win32。")
+        else:
+            if d["service_lower"] in ("libusbk", "winusb") or not d["service_lower"]:
+                cur_drv = d["service"] or "无驱动"
+                print(f"[*] 检测到 0x054C:0x{d['pid']:04X} 当前使用 {cur_drv} (Status={d['status']})，正在切换为临时 libusb-win32...")
+            install_libusb0_for_pid(SONY_VID, d["pid"], "Sony ILCE-7RM3 MSC (Temp libusb)")
         return {"mode": "msc", "pid": d["pid"]}
 
     if any("mtp" in d["service_lower"] or d["class_name"].upper() == "WPD" for d in present):
@@ -319,7 +352,7 @@ def ensure_camera_driver_for_entry() -> dict:
             "请在相机 MENU -> 设置(黄箱子) -> USB连接 改为「大容量存储 (Mass Storage)」后重试。"
         )
 
-    desc = ", ".join(f"0x{d['pid']:04X}({d['service'] or d['class_name']})" for d in present)
+    desc = ", ".join(f"0x{d['pid']:04X}({d['service'] or '无驱动'}/Status={d['status']})" for d in present)
     raise RuntimeError(f"检测到未知状态的 Sony USB 设备: {desc}")
 
 
@@ -329,7 +362,8 @@ def ensure_service_mode_driver_ready(seen_pids: set[int] | None = None) -> bool:
         return False
     present = [d for d in list_sony_pnp_devices() if d["present"] and d["pid"] in SENSER_PIDS]
     for d in present:
-        if d["service_lower"] == "libusb0":
+        status_up = d.get("status_upper", str(d["status"]).upper())
+        if d["service_lower"] == "libusb0" and status_up == "OK":
             return True
         if seen_pids is not None and d["pid"] in seen_pids:
             continue
@@ -337,6 +371,8 @@ def ensure_service_mode_driver_ready(seen_pids: set[int] | None = None) -> bool:
             return False
         if seen_pids is not None:
             seen_pids.add(d["pid"])
+        cur_drv = d["service"] or "无驱动"
+        print(f"[*] 检测到新进入 Service Mode 的设备 0x054C:0x{d['pid']:04X} (Status={d['status']}, Service={cur_drv})，正在自动装配临时 libusb-win32...")
         install_libusb0_for_pid(SONY_VID, d["pid"], "Sony Service Mode (Temp libusb)")
         return True
     return False
@@ -449,7 +485,7 @@ def format_status_lines() -> list[str]:
     if present:
         for d in present:
             lines.append(
-                f"当前连接: 0x054C:0x{d['pid']:04X} | Class={d['class_name']} | Service={d['service'] or '(none)'} | {d['friendly_name']}"
+                f"当前连接: 0x054C:0x{d['pid']:04X} | Status={d['status']} | Class={d['class_name'] or '(none)'} | Service={d['service'] or '(none)'} | {d['friendly_name']}"
             )
     else:
         lines.append("当前连接: 未检测到在线的 Sony (0x054C) USB 设备")

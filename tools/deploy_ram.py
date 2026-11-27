@@ -235,6 +235,27 @@ def diagnose_sony_usb_state() -> str:
         )
 
     if not devs:
+        if sys.platform == "win32":
+            try:
+                from win_usb_driver import SENSER_PIDS, list_sony_pnp_devices
+
+                pnp_present = [d for d in list_sony_pnp_devices(present_only=True) if d["present"]]
+                if pnp_present:
+                    pnp_desc = ", ".join(
+                        f"0x054C:0x{d['pid']:04x} (Status={d['status']}, Service={d['service'] or '无驱动'})"
+                        for d in pnp_present
+                    )
+                    if any(d["pid"] in SENSER_PIDS for d in pnp_present):
+                        return (
+                            f"Windows PnP 检测到相机已进入 Service Mode ({pnp_desc})，但尚未绑定 libusb0 驱动。\n"
+                            "请右键以管理员运行 `一键注入拓展菜单.bat` 自动装配驱动（或确认安全软件未拦截驱动安装），若相机屏幕无响应请重开电源后重试。"
+                        )
+                    return (
+                        f"Windows PnP 检测到 Sony 设备 ({pnp_desc})，但 libusb 尚未接管该接口。"
+                        "请运行 `一键注入拓展菜单.bat` 自动切换临时 libusb-win32 驱动。"
+                    )
+            except Exception:
+                pass
         return (
             "USB 总线上未发现 Sony (0x054c) 设备：请确认相机已开机、使用带数据传输能力的 USB 线直连电脑，"
             "且相机 MENU -> 设置 -> USB连接 设为「大容量存储 (Mass Storage)」。"
@@ -361,10 +382,10 @@ def ensure_service_terminal(driver, force: bool = False, on_wait_senser=None):
         while time.monotonic() < deadline:
             time.sleep(0.5)
             attempt += 1
-            if callable(on_wait_senser) and attempt >= 3:
+            if callable(on_wait_senser) and attempt >= 2:
                 try:
                     if on_wait_senser():
-                        deadline = max(deadline, time.monotonic() + 10.0)
+                        deadline = max(deadline, time.monotonic() + 15.0)
                 except Exception as cb_exc:
                     raise RuntimeError(f"自动切换 Service Mode 驱动失败: {cb_exc}") from cb_exc
             try:
