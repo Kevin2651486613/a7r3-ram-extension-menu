@@ -20,18 +20,18 @@
 
 ---
 
-## 预编译下载（普通用户免装 LLVM / 免手动 Zadig）
+## 预编译内置（普通用户免装 LLVM / 免手动 Zadig / 免单独下载 `.so`）
 
 > [!IMPORTANT]
-> **普通体验用户不需要安装 LLVM，不需要手动配置 Zadig，也不需要手工下载 `.so`！**
-> 只要电脑装有 **Python 3.10+**，下载本仓库后**直接双击 [一键注入拓展菜单.bat](一键注入拓展菜单.bat)** 即可：若缺少 Python 依赖会自动 `pip install`，若缺少 `build\demo_native_tab7_ram.so` 会**自动从 GitHub Releases 拉取并校验 SHA-256**，再自动完成驱动切换、注入与还原。如网络受限需离线放置，也可手动下载下方预编译文件放入 `build\demo_native_tab7_ram.so`。
+> **普通体验用户不需要安装 LLVM，不需要手动配置 Zadig，也不需要单独下载或联网拉取 `.so`！**
+> 纯原创预编译产物已直接内置在 [`prebuilt/demo_native_tab7_ram.so`](prebuilt/demo_native_tab7_ram.so)（随仓库打包）。只要电脑装有 **Python 3.10+**，下载本仓库后**直接双击 [一键注入拓展菜单.bat](一键注入拓展菜单.bat)** 即可全自动完成注入与驱动还原。
 
 | 项目 | 内容 |
 | --- | --- |
-| 当前发布版本 | [`v2.2-native-tab7`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/tag/v2.2-native-tab7)（[全部 Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)） |
-| 预编译插件直链 | [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so)（`112,280 bytes`，纯原创零 Sony 固件字节） |
-| SHA-256 校验 | `34f5de25cb961a235e7932b87a9b63881afb64292ff24b73a5b7518ccae06f60` |
-| 本地放置路径 | `build\demo_native_tab7_ram.so` |
+| 当前版本 | [`v2.2.1-native-tab7`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/tag/v2.2.1-native-tab7)（[全部 Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)） |
+| 随仓库内置路径 | [`prebuilt/demo_native_tab7_ram.so`](prebuilt/demo_native_tab7_ram.so)（`112,604 bytes`，纯原创零 Sony 固件字节，开箱即用） |
+| SHA-256 校验 | `7fd297d0f570efc02efd135384bb007a64ba0bbee302cba832a65783bdfc3ebc` |
+| 独立 Release 镜像 | [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so)（仅当删空 `prebuilt/` 且无本地 `build/` 时兜底拉取） |
 
 ---
 
@@ -69,7 +69,7 @@
 ### 方式一：普通体验用户（Windows 全自动一键注入 — 免装 LLVM、免手动 Zadig，已真机验证）
 
 > [!TIP]
-> 运行时双显载荷 `/tmp_bt/dual_hud_payload.bin` 已与插件 `.so` 完全解耦，且最小 MIT `pmca` 通信层已内置于 `tools/vendor/pmca/`。普通体验用户**无需安装 LLVM 编译器**、**无需克隆外部仓库**、**无需手动跑 Zadig**，连 `.so` 与 Python 依赖都会由一键脚本自动补齐。
+> 仓库已随包内置最小 MIT `pmca` 通信层（[`tools/vendor/pmca/`](tools/vendor/pmca)）与纯原创预编译插件（[`prebuilt/demo_native_tab7_ram.so`](prebuilt/demo_native_tab7_ram.so)），且运行时双显载荷 `/tmp_bt/dual_hud_payload.bin` 与插件完全解耦。普通体验用户**无需安装 LLVM 编译器**、**无需克隆外部仓库**、**无需手动跑 Zadig**、**无需单独下载 `.so`**，双击一键脚本即可完成全部流程。
 
 1. **安装 Python 3.10+（仅首次需要）**：
    - **Windows 一键命令行安装**（Win10 / Win11 打开 PowerShell 运行，装完后重新打开终端或直接双击 `.bat` 刷新环境变量）：
@@ -82,10 +82,9 @@
    - 将相机 `MENU -> 设置(黄箱子) -> USB连接` 设为 **大容量存储 (Mass Storage)**，通过数据线直连电脑并开机。
 3. **双击一键注入（全自动闭环）**：
    - 直接双击根目录 **[一键注入拓展菜单.bat](一键注入拓展菜单.bat)**（或以管理员运行 `python tools/a7r3_addon_console.py one-click`）。
-   - *(仅离线环境需要提前手动从 **[GitHub Releases](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest)** 下载 [`demo_native_tab7_ram.so`](https://github.com/Kevin2651486613/a7r3-ram-extension-menu/releases/latest/download/demo_native_tab7_ram.so) 放入 `build\demo_native_tab7_ram.so`；联网状态下脚本会自动拉取并校验。)*
    - 脚本会自动完成全部闭环并已在真实 Windows 环境验证通过：
      1. 自动请求 UAC 管理员权限，并检测补装缺失的 3 个 Python 依赖（`keystone-engine`、`pyusb`、`pycryptodomex`）；
-     2. 若本地缺少 `build\demo_native_tab7_ram.so`，自动从 GitHub Releases 拉取最新版并严格校验文件大小、SHA-256 与 ARM32 ELF 格式；
+     2. 自动校验并选用仓库内置 [`prebuilt/demo_native_tab7_ram.so`](prebuilt/demo_native_tab7_ram.so)（本地有 `build/demo_native_tab7_ram.so` 时优先使用本地编译版）；
      3. 自动将内置驱动助手复制到临时目录（规避下载目录 / 工作区的 Low Mandatory Level 与 Mark-of-the-Web 限制），临时为 `054C:0BFF` 安装 `libusb-win32`；
      4. 自动切入 Service Mode 并临时绑定 `054C:0336` / `02A9`；
      5. 如本机尚无运行时双显载荷，自动从已连接相机只读提取 `viewStlrec.uxc`、校验 SHA-256 后生成并上传 `/tmp_bt/dual_hud_payload.bin`；
@@ -115,7 +114,7 @@
 
      | 命令 | 作用 |
      | --- | --- |
-     | `one-click` | 缺包自动 `pip` → 缺 `.so` 自动拉取 Release → 自动换驱 → 按需提取载荷 → 注入 → 全量还原驱动 |
+     | `one-click` | 缺包自动 `pip` → 优先用 `build/` 或内置 `prebuilt/.so` → 自动换驱 → 注入 → 全量还原驱动 |
      | `one-click --rebuild` | 强制从源码重新编译 `.so` 并完成全自动注入与驱动还原 |
      | `download-so` | 手动从 GitHub Releases 拉取最新版预编译 `demo_native_tab7_ram.so` 并校验 SHA-256 |
      | `init-camera` | 连机从相机只读拉取 `/lib` 三件套（MD5 校验）与运行时双显载荷 `.bin` |
@@ -167,6 +166,7 @@ a7r3-ram-extension-menu/
 ├── .github/                           # Issue 表单模板与 PR 模板
 ├── 一键注入拓展菜单.bat                # Windows 一键全自动闭环入口（自动 UAC / 换驱 / 注入 / 还原，CRLF）
 ├── 启动拓展菜单工具.bat                # Windows 交互式控制台入口（CRLF）
+├── prebuilt/                          # 随仓库内置纯原创预编译 .so（开箱即用，零专有固件字节）
 ├── src/
 │   ├── core/                          # 核心 SDK：系统调用、显存读取、绘制、输入与按键钩子
 │   ├── modules/                       # 功能模块：第 7 大类、菜单触摸、双显、回放对焦、快门音效
@@ -197,7 +197,7 @@ a7r3-ram-extension-menu/
 
 | 现象 / 提示 | 根因 | 解决方法 |
 | --- | --- | --- |
-| `未找到可用插件` 且无 LLVM | 普通用户未放入预编译 `.so`，或开发者未安装 LLVM | 普通用户从 Release 下载 `demo_native_tab7_ram.so` 放进 `build\`；开发者运行 `winget install LLVM.LLVM` 后用 `--rebuild` |
+| `未找到可用插件` 且无 LLVM | 删空了 `prebuilt/` 且未自行编译 | 恢复 [`prebuilt/demo_native_tab7_ram.so`](prebuilt/demo_native_tab7_ram.so)，或开发者安装 LLVM 后加 `--rebuild` |
 | `未找到 A7R3 v3.10 系统库` | 触发源码编译但本机尚无 `firmware/lib/` | 连上相机运行 `one-click --rebuild` 或 `init-camera` 自动只读提取（使用预编译 `.so` 无需此步） |
 | 一直提示处于 **MTP 模式** | 相机 USB 模式设为了 MTP / PC 遥控 | 相机 `MENU -> 设置 -> USB连接` 改为 **大容量存储 (Mass Storage)** |
 | **注入中途拔线**导致电脑打不开存储卡 | 临时 `libusb-win32` 驱动尚未卸载 | 运行 `python tools/a7r3_addon_console.py restore-driver`（或在控制台选 `[8]`）自动还原为原生 `USBSTOR` |

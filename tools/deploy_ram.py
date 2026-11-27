@@ -680,6 +680,10 @@ def main() -> int:
 
     require_usb_runtime()
     if args.action == "deploy":
+        default_build_so = SDK_DIR / "build" / "demo_native_tab7_ram.so"
+        prebuilt_so = SDK_DIR / "prebuilt" / "demo_native_tab7_ram.so"
+        if not args.so.is_file() and args.so == default_build_so and prebuilt_so.is_file():
+            args.so = prebuilt_so
         validate_arm32_shared_elf(args.so)
 
     with open_usb_drivers() as driver:

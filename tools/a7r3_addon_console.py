@@ -47,6 +47,7 @@ from win_usb_driver import (  # noqa: E402
 )
 
 DEFAULT_SO = SDK_DIR / "build" / "demo_native_tab7_ram.so"
+PREBUILT_SO = SDK_DIR / "prebuilt" / "demo_native_tab7_ram.so"
 DEFAULT_SRC = SDK_DIR / "src" / "entries" / "demo_native_tab7.c"
 GEN_ASSETS = TOOLS_DIR / "gen_md3_assets.py"
 BUILD_SCRIPT = TOOLS_DIR / "build_addon.py"
@@ -100,6 +101,15 @@ def validate_runtime_env() -> None:
     for p in (BUILD_SCRIPT, DEFAULT_SRC):
         if not p.is_file():
             raise FileNotFoundError(f"缺少必要工程文件: {p}")
+
+
+def resolve_effective_so(so_path: Path) -> Path:
+    """Prefer explicit/build .so when present; fall back to bundled prebuilt/ when using default target."""
+    if so_path.is_file():
+        return so_path
+    if (so_path == DEFAULT_SO or so_path.name == RELEASE_SO_ASSET_NAME) and PREBUILT_SO.is_file():
+        return PREBUILT_SO
+    return so_path
 
 
 def validate_so_path(so_path: Path) -> None:
@@ -228,11 +238,12 @@ def action_check(so_path: Path) -> int:
     env_local = SDK_DIR / ".env.local"
     print(f"  [{'OK' if env_local.is_file() else 'INFO'}] 本地环境配置 .env.local: {'已加载' if env_local.is_file() else '未创建 (将使用系统环境变量 / 自动探测)'}")
 
+    effective_so = resolve_effective_so(so_path)
     so_valid = False
     so_err: Exception | None = None
-    if so_path.exists():
+    if effective_so.exists():
         try:
-            validate_so_path(so_path)
+            validate_so_path(effective_so)
             so_valid = True
         except Exception as exc:
             so_err = exc
@@ -358,18 +369,22 @@ def action_check(so_path: Path) -> int:
     print(f"  [INFO] 运行时 Dual-HUD 载荷: {payload_msg}")
 
     if so_valid:
-        print(f"  [OK] 插件产物 ELF32 ARM 校验通过: {so_path.name} ({so_path.stat().st_size} bytes)")
+        if effective_so == PREBUILT_SO and not so_path.exists():
+            print(f"  [OK] 随库内置预编译插件 ELF32 ARM 校验通过: prebuilt/{effective_so.name} ({effective_so.stat().st_size} bytes)")
+        else:
+            print(f"  [OK] 插件产物 ELF32 ARM 校验通过: {effective_so.name} ({effective_so.stat().st_size} bytes)")
     elif so_err is not None:
         print(f"  [FAIL] 插件产物校验失败: {so_err}")
         ok_all = False
     else:
-        print(f"  [INFO] 插件产物尚未准备: {so_path} (请先下载 Release 预编译产物或运行 build 编译)")
+        print(f"  [INFO] 插件产物尚未准备: {so_path} (请恢复 prebuilt/ 或运行 build 编译)")
 
     return 0 if ok_all else 1
 
 
 def action_deploy(so_path: Path, force: bool = False) -> int:
     validate_runtime_env()
+    so_path = resolve_effective_so(so_path)
     validate_so_path(so_path)
 
     print(f"[*] 准备纯内存部署: {so_path.name} ({so_path.stat().st_size} bytes)")
@@ -688,20 +703,30 @@ def action_one_click(
         print("[*] 模式: 自动切换临时 libusb-win32 驱动 -> 注入部署 -> 完成后自动全部还原。")
 
     so_valid = False
-    if so_path.is_file():
-        try:
-            validate_so_path(so_path)
-            so_valid = True
-        except Exception:
-            so_valid = False
+    using_prebuilt = False
+    if not rebuild:
+        if so_path.is_file():
+            try:
+                validate_so_path(so_path)
+                so_valid = True
+            except Exception:
+                so_valid = False
+        elif (so_path == DEFAULT_SO or so_path.name == RELEASE_SO_ASSET_NAME) and PREBUILT_SO.is_file():
+            try:
+                validate_so_path(PREBUILT_SO)
+                so_path = PREBUILT_SO
+                so_valid = True
+                using_prebuilt = True
+            except Exception:
+                so_valid = False
 
     llvm_ready = _has_llvm_toolchain()
     need_build = False
 
     if so_valid:
-        need_build = bool(rebuild or (llvm_ready and _sources_newer_than(so_path)))
+        need_build = bool(rebuild or (not using_prebuilt and llvm_ready and _sources_newer_than(so_path)))
     elif not rebuild and (so_path == DEFAULT_SO or so_path.name == RELEASE_SO_ASSET_NAME):
-        print(f"[*] 未检测到本地 {so_path.name}，正在从 GitHub Releases 自动拉取最新预编译插件...")
+        print(f"[*] 未检测到本地或内置 {so_path.name}，正在从 GitHub Releases 自动拉取最新预编译插件...")
         try:
             download_prebuilt_so(so_path)
             so_valid = True
@@ -711,7 +736,7 @@ def action_one_click(
                 need_build = True
             else:
                 raise RuntimeError(
-                    f"未检测到本地 {so_path.name}，且从 GitHub Releases 自动拉取失败 ({dl_exc})。\n"
+                    f"未检测到本地或内置 {so_path.name}，且从 GitHub Releases 自动拉取失败 ({dl_exc})。\n"
                     f"- 请检查网络（或设置镜像环境变量 A7R3_RELEASE_SO_URL），手动下载后放入 {so_path}：\n"
                     f"  {GITHUB_LATEST_SO_URL}\n"
                     "- 或开发者安装 LLVM 后自行编译：Windows 运行 `winget install LLVM.LLVM` 后加 `--rebuild`。"
@@ -778,10 +803,14 @@ def action_one_click(
 
 
 def print_banner(so_path: Path) -> None:
+    effective_so = resolve_effective_so(so_path)
     if so_path.exists():
         st = so_path.stat()
         mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
         so_info = f"就绪 ({st.st_size} bytes, 更新于 {mtime})"
+    elif effective_so == PREBUILT_SO and PREBUILT_SO.is_file():
+        st = PREBUILT_SO.stat()
+        so_info = f"随库内置预编译就绪 (prebuilt/{PREBUILT_SO.name}, {st.st_size} bytes)"
     else:
         so_info = "未准备 (一键注入将自动从 Release 拉取)"
 
@@ -791,7 +820,7 @@ def print_banner(so_path: Path) -> None:
     print("=" * 68)
     print(f"  目标插件: {so_path.name} -> {so_info}")
     print("-" * 68)
-    print("  [1] 全自动一键注入 (缺依赖自动pip + 缺.so自动拉取 + 自动换驱 + 纯RAM部署 + 还原)")
+    print("  [1] 全自动一键注入 (缺依赖自动pip + 内置prebuilt/.so开箱即用 + 自动换驱/部署/还原)")
     print("  [2] 仅部署当前已编译插件 (不自动切换驱动)")
     print("  [3] 查看相机连接与运行状态 / 日志")
     print("  [4] 安全卸载插件并恢复原生钩子 (不重启相机)")

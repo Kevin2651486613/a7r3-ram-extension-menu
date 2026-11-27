@@ -19,7 +19,7 @@
 4. **不得削弱或绕过 fail-closed 安全检查**：
    - `tools/deploy_ram.py` 的 `check_camera_model()`：读取机型失败或机型不是 ILCE-7RM3 时必须拒绝继续，**不得把 `--force` 设为默认**；
    - `tools/gen_dual_hud_payload.py` 的 `patch_viewstlrec()`：SHA-256 指纹校验不匹配必须报错退出，**不得添加绕过开关**。
-5. **零专有资产**：**不得提交** Sony 固件、`.so` 库、固件提取物、`src/*.local.h`、`src/md3_demo_labels.h`、`.env.local`、`firmware/` 目录内容，或含个人绝对路径、序列号、账号信息的日志与截图。
+5. **零专有资产**：**不得提交** Sony 固件、原厂 `.so` 库、固件提取物、`src/*.local.h`、`src/md3_demo_labels.h`、`.env.local`、`firmware/` 目录内容，或含个人绝对路径、序列号、账号信息的日志与截图（`prebuilt/demo_native_tab7_ram.so` 为本仓库 MIT 源码编译产物，`.gitignore` 已隔离其余 `*.so` 与 `build/`）。
 
 ### 1.2 真机测试建议
 

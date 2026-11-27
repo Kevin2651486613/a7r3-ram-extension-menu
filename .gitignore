@@ -1,6 +1,8 @@
 # Build outputs & compiled binaries
 build/
 *.so
+!prebuilt/
+!prebuilt/demo_native_tab7_ram.so
 *.o
 *.elf
 *.bin

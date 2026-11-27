@@ -40,7 +40,7 @@ pip install -r requirements.txt
   sudo apt install clang lld llvm libusb-1.0-0 ffmpeg
   ```
   *(普通用户需配置 Sony `054c` 的 `udev` 规则或用 `sudo` 运行注入。)*
-- **Windows**：直接双击 [`一键注入拓展菜单.bat`](../一键注入拓展菜单.bat) 时，若缺失 Python 包会自动安装 `requirements.txt`，若本地缺少 `build/demo_native_tab7_ram.so` 会自动从 GitHub Releases 拉取并校验 SHA-256（可通过 `A7R3_RELEASE_SO_URL` 指定自定义镜像下载地址）。如需修改 C 代码重新编译，执行 `winget install LLVM.LLVM` 即可（脚本自动探测 `C:\Program Files\LLVM\bin`）。
+- **Windows**：仓库已内置 [`prebuilt/demo_native_tab7_ram.so`](../prebuilt/demo_native_tab7_ram.so)，直接双击 [`一键注入拓展菜单.bat`](../一键注入拓展菜单.bat) 即可离线使用，若缺少 Python 包会自动安装 `requirements.txt`。如需修改 C 代码重新编译，执行 `winget install LLVM.LLVM` 后加 `--rebuild` 即可（会自动探测 `C:\Program Files\LLVM\bin`）。
 
 ### 2.2 一键从相机初始化或手动配置 `.env.local`
 
