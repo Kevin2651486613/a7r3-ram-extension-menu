@@ -230,3 +230,13 @@ a7r3-ram-extension-menu/
 - [工具链配置、编译约束与部署指南 (docs/TOOLS_AND_BUILD.md)](docs/TOOLS_AND_BUILD.md)
 - [实机调试踩坑记录与根因分析 (docs/LESSONS_LEARNED.md)](docs/LESSONS_LEARNED.md)
 - [给 AI Agent 的环境准备与离线自检提示词 (docs/AGENT_PROMPT.md)](docs/AGENT_PROMPT.md)
+
+---
+
+## 支持项目
+
+如果你喜欢本项目并觉得它对你有帮助，欢迎扫码支持（支付宝 / 微信支付）。
+
+收到的资金将全部用于该项目的持续推进或相关项目的开发，希望大家多多支持，减轻一些 token 压力。
+
+![支持项目收款码](docs/images/support-qr.png)
